@@ -1,18 +1,7 @@
 import { describe, expect, test } from 'bun:test';
-import { assistantTexts, issueKey, labelOf, prFor, verdictOf, type Pr } from '../tui/data';
+import { assistantTexts, issueKey, labelOf, prFor, verdictOf } from '../tui/data';
 import { initialState, reduce, selected, visible, type State } from '../tui/state';
-import { NOW, ROWS, row } from './fixtures';
-
-const pr = (over: Partial<Pr>): Pr => ({
-  number: 1,
-  title: 't',
-  branch: 'b',
-  url: 'u',
-  state: 'OPEN',
-  draft: true,
-  ci: 'none',
-  ...over,
-});
+import { NOW, ROWS, pr, row } from './fixtures';
 
 describe('data', () => {
   test('issueKey reads the key from a session name', () => {
@@ -85,7 +74,7 @@ describe('state', () => {
     const s = { ...loaded(), selId: 'd1' };
     const step = reduce(s, { type: 'key', key: { name: 'char', ch: 'x' } });
     expect(step.effects).toEqual([]);
-    expect(step.state.confirmStop).toBeNull();
+    expect(step.state.confirm).toBeNull();
   });
 
   test('n opens the prompt and enter launches what was typed', () => {
@@ -100,7 +89,7 @@ describe('state', () => {
     const s = reduce(loaded(), { type: 'key', key: { name: 'char', ch: 'n' } }).state;
     const step = reduce(s, { type: 'key', key: { name: 'char', ch: 'q' } });
     expect(step.effects).toEqual([]);
-    expect(step.state.input).toBe('q');
+    expect(step.state.input).toEqual({ kind: 'new', text: 'q' });
   });
 
   test('enter opens detail, then attaches; o opens the PR', () => {

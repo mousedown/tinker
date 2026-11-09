@@ -51,6 +51,18 @@ names, commit and PR title formats, test commands and conventions all come from 
 8. **Wait, then end.** Do not end your turn while a background task (a test run, a CI watch) is
    still running: wait for it.
 
+## Later commands
+
+After you stop, the user may resume this session from the Tinker TUI with one more instruction. Each
+is the go-ahead for its own scope, and every other rule here still holds:
+
+- `Tinker command: prepare …` (or `/tinker:prepare …`) takes this PR to ready, and with `--auto-merge`
+  arms auto-merge. Follow the skill file it names; it lifts the "never mark ready" rule for that run only.
+- `Tinker command: fix CI …` and `Tinker command: update …` work on this PR's branch only, and leave
+  its draft state alone.
+
+Each one ends with the same last line as below.
+
 ## When to stop and ask
 
 Stop only for money, legal text, production data, credentials, customer-facing copy, or a fact only

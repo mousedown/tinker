@@ -14,11 +14,15 @@ Usage:
   tinker <issue>... [--note "text"] [--repo PATH] [--dry-run]
   tinker status [--all]
   tinker tui [--plain]
+  tinker tidy [--all] [--dry-run]
 
 An issue is a tracker key (ABC-123), a GitHub issue number or URL (42, #42, https://…/issues/42),
 or a quoted description. With TINKER_KEY_PREFIX=ABC set, a bare number means ABC-<n> instead.
 Each issue becomes one background session, started in the current repo (or --repo / TINKER_REPO):
 claude --bg --agent tinker:tinker.
+
+tidy removes the sessions, worktrees and local branches of merged PRs; --all also takes closed PRs and
+sessions over a week old with no PR. claude rm refuses anything with unpushed work.
 
 Self-review defaults to Claude Code's /code-review --fix; set TINKER_REVIEW (e.g. "/my-review --fix")
 to use another review command.
@@ -38,14 +42,20 @@ status() {
   jq -r '.[] | [.id, .sessionId, .cwd, .state, (.startedAt|tostring), .name] | @tsv' <<<"$rows" |
     while IFS=$'\t' read -r id sid cwd state started name; do
       key=$(grep -oE '[A-Z][A-Z0-9]+-[0-9]+' <<<"$name" | head -1 || true)
-      pr="-"
+      pr="-" url=""
       if [ -n "$key" ] && [ -d "$cwd" ]; then
-        pr=$(cd "$cwd" && gh pr list --state all --search "$key in:title" --json number,isDraft,state \
-          --jq 'first | if . == null then "-" else "#\(.number) \(if .state == "MERGED" then "merged" elif .state == "CLOSED" then "closed" elif .isDraft then "draft" else "ready" end)" end' 2>/dev/null || echo "-")
+        line=$(cd "$cwd" && gh pr list --state all --search "$key in:title" --json number,isDraft,state,url \
+          --jq 'first | if . == null then "-\t" else "#\(.number) \(if .state == "MERGED" then "merged" elif .state == "CLOSED" then "closed" elif .isDraft then "draft" else "ready" end)\t\(.url)" end' 2>/dev/null || printf -- '-\t')
+        pr="${line%%$'\t'*}" url="${line#*$'\t'}"
       fi
       mins=$(( ( $(date +%s) - started / 1000 ) / 60 ))
       if [ $mins -ge 1440 ]; then age="$((mins / 1440))d"; elif [ $mins -ge 60 ]; then age="$((mins / 60))h"; else age="${mins}m"; fi
-      printf '%-9s %-12s %-9s %-22s %-6s %s\n' "$id" "${key:--}" "$state" "$pr" "$age" "$name"
+      cell=$(printf '%-22s' "$pr")
+      if [ -t 1 ] && [ "${TINKER_LINKS:-1}" != 0 ] && [ -n "$url" ] && [ "$pr" != "-" ]; then
+        num="${pr%% *}"
+        cell="$(printf '\033]8;;%s\033\\%s\033]8;;\033\\' "$url" "$num")${cell#"$num"}"
+      fi
+      printf '%-9s %-12s %-9s %s %-6s %s\n' "$id" "${key:--}" "$state" "$cell" "$age" "$name"
     done
 }
 
@@ -113,5 +123,6 @@ case "${1:-}" in
   ""|-h|--help) usage ;;
   status) shift; status "$@" ;;
   tui) shift; exec bun "$ROOT/tui/main.ts" "$@" ;;
+  tidy) shift; exec bun "$ROOT/tui/main.ts" --tidy "$@" ;;
   *) launch "$@" ;;
 esac
