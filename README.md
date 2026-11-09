@@ -92,41 +92,35 @@ so you add it by its GitHub name.
 For Jira keys (`ABC-123`), the worker reads the ticket through whatever Jira access your Claude Code
 already has, such as the Atlassian MCP server. GitHub issues and plain descriptions only need `gh`.
 
-### 2. Install the plugin
-
-In Claude Code:
+### 2. Install
 
 ```bash
-/plugin marketplace add mousedown/tinker
-/plugin install tinker@tinker
+curl -fsSL https://raw.githubusercontent.com/mousedown/tinker/main/install.sh | bash
 ```
 
-Or from your shell:
+This adds the marketplace, installs the plugin (the `/tinker` skill and the `tinker:tinker` worker
+agent), and links the `tinker` launcher into `~/.local/bin`, adding that folder to your `PATH` if it
+isn't there yet. It checks the prerequisites first and is safe to re-run; a second run updates
+everything instead. Restart Claude Code (or run `/reload-plugins`) and check that `/tinker` appears
+in `/help`.
+
+<details>
+<summary>Installing by hand</summary>
 
 ```bash
 claude plugin marketplace add mousedown/tinker
 claude plugin install tinker@tinker
-```
-
-This installs the `/tinker` skill and the `tinker:tinker` worker agent. Restart Claude Code (or run
-`/reload-plugins`) and check that `/tinker` appears in `/help`.
-
-### 3. Optional: add `tinker` to your shell
-
-`/tinker` covers launching from inside Claude Code. To run `tinker status` and `tinker tui` from a
-plain terminal, link the launcher from the marketplace's checkout onto your `PATH`:
-
-```bash
 mkdir -p ~/.local/bin
-ln -sf ~/.claude/plugins/marketplaces/tinker/bin/tinker ~/.local/bin/tinker
-tinker --help
+ln -sf "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/plugins/marketplaces/tinker/bin/tinker" ~/.local/bin/tinker
 ```
 
 Link to `marketplaces/tinker`, not `cache/tinker/tinker/<version>`. The cached copy moves to a new
 folder with each version, so a link to it breaks after an update. If `~/.local/bin` isn't already on
 your `PATH`, add `export PATH="$HOME/.local/bin:$PATH"` to your shell profile.
 
-### 4. Try it
+</details>
+
+### 3. Try it
 
 From inside the repo you want fixed:
 
@@ -138,9 +132,9 @@ tinker tui              # watch it run
 
 ### Updating and removing
 
+To update, run the install command again. To remove:
+
 ```bash
-/plugin marketplace update tinker   # fetches the latest version
-claude plugin update tinker@tinker  # installs it
 /plugin uninstall tinker@tinker
 /plugin marketplace remove tinker
 rm ~/.local/bin/tinker              # if you linked it
@@ -152,9 +146,7 @@ Point the marketplace at your clone and Claude Code will load your local changes
 
 ```bash
 git clone https://github.com/mousedown/tinker && cd tinker
-claude plugin marketplace add "$PWD"
-claude plugin install tinker@tinker
-ln -sf "$PWD/bin/tinker" ~/.local/bin/tinker
+TINKER_SOURCE="$PWD" ./install.sh
 ```
 
 ## Usage
