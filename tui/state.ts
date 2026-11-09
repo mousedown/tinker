@@ -144,7 +144,7 @@ export const HELP =
 
 function toggleMark(state: State, row: Row): State {
   const marks = state.marks.includes(row.id) ? state.marks.filter((m) => m !== row.id) : [...state.marks, row.id];
-  return move({ ...state, marks }, 1);
+  return { ...state, marks };
 }
 
 function markWhere(state: State, test: (r: Row) => boolean, empty: string): State {

@@ -51,11 +51,13 @@ describe('tidy', () => {
 });
 
 describe('menu', () => {
-  test('space ticks and moves down, * ticks the group, u clears', () => {
+  test('space ticks in place, * ticks the group, u clears', () => {
     let s = loaded();
     s = press(s, ' ');
     expect(s.marks).toEqual(['p1']);
-    expect(s.selId).toBe('b1');
+    expect(s.selId).toBe('p1');
+    s = press(s, ' ');
+    expect(s.marks).toEqual([]);
     s = press(s, 'u');
     expect(s.marks).toEqual([]);
     s = { ...s, selId: 'b1' };
