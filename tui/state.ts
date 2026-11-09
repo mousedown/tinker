@@ -17,7 +17,6 @@ export interface Input {
 export interface Confirm {
   text: string;
   effects: Effect[];
-  doing?: { labels: string[]; verb: string };
 }
 
 export interface Pending {
@@ -335,10 +334,14 @@ export function apply(state: State, spec: CommandSpec): Step {
   }
   const note = skipped.length ? ` (${skipped.length} skipped: ${skipped.join(', ')})` : '';
   if (effects.length === 0) return { state: say(state, `Nothing to do${note}`, 'error'), effects: [] };
-  return {
-    state: { ...state, confirm: { text: `${spec.verb} ${names.join(', ')}?${note} y/n`, effects, doing: { labels: names, verb: spec.doing } } },
-    effects: [],
-  };
+  return start(state, effects, { labels: names, verb: spec.doing }, `${spec.verb} ${names.join(', ')}${note}`);
+}
+
+function start(state: State, effects: Effect[], doing: { labels: string[]; verb: string }, text: string): Step {
+  const pending = { ...state.pending };
+  const waitFor = effects.some((e) => e.type === 'resume' || e.type === 'launch') ? 'session' : 'done';
+  for (const label of doing.labels) pending[label] = { verb: doing.verb, since: state.now, waitFor };
+  return { state: say({ ...state, marks: [], pending }, `${text}…`), effects };
 }
 
 function toggle(state: State, key: keyof Settings, label: string): Step {
@@ -425,17 +428,7 @@ function reduceInput(state: State, key: Key): Step {
 function reduceConfirm(state: State, key: Key): Step {
   const confirm = state.confirm!;
   const cleared = { ...state, confirm: null };
-  if (key.name === 'char' && (key.ch === 'y' || key.ch === 'Y')) {
-    const marks = confirm.effects.some((e) => e.type === 'stop') ? state.marks : [];
-    const n = confirm.effects.length;
-    const pending = { ...state.pending };
-    const waitFor = confirm.effects.some((e) => e.type === 'resume' || e.type === 'launch') ? 'session' : 'done';
-    for (const label of confirm.doing?.labels ?? []) pending[label] = { verb: confirm.doing!.verb, since: state.now, waitFor };
-    return {
-      state: say({ ...cleared, marks, pending }, n === 1 ? `${confirm.doing?.verb ?? 'Working'}…` : `${confirm.doing?.verb ?? 'Working'} ${n}…`),
-      effects: confirm.effects,
-    };
-  }
+  if (key.name === 'char' && (key.ch === 'y' || key.ch === 'Y')) return { state: cleared, effects: confirm.effects };
   return { state: say(cleared, 'Cancelled.'), effects: [] };
 }
 

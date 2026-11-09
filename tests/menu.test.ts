@@ -28,10 +28,8 @@ describe('tidy', () => {
   test('t ticks every tidyable row and c asks before cleaning; only a merged PR loses its branch', () => {
     const s = press(loaded([...ROWS, merged, closed, stale]), 't');
     expect(s.marks.sort()).toEqual(['c1', 'm1', 's1']);
-    const asked = reduce(s, key('c'));
-    expect(asked.effects).toEqual([]);
-    expect(asked.state.confirm?.text).toContain('Clean up');
-    const done = reduce(asked.state, key('y'));
+    const done = reduce(s, key('c'));
+    expect(done.state.message?.text).toContain('Clean up');
     expect(done.effects).toEqual([
       { type: 'cleanup', id: 'm1', ids: ['m1'], cwd: '/repo', label: 'ABC-200', branch: 'fix/ABC-200' },
       { type: 'cleanup', id: 'c1', ids: ['c1'], cwd: '/repo', label: 'ABC-201', branch: null },
@@ -68,10 +66,9 @@ describe('menu', () => {
 
   test('prepare resumes the ticked sessions and skips the running ones, naming them', () => {
     const s = { ...loaded(), marks: ['d1', 'w1'] };
-    const asked = reduce(s, key('p'));
-    expect(asked.state.confirm?.text).toContain('Prepare ABC-103?');
-    expect(asked.state.confirm?.text).toContain('ABC-101 still running');
-    const done = reduce(asked.state, key('y'));
+    const done = reduce(s, key('p'));
+    expect(done.state.confirm).toBeNull();
+    expect(done.state.message?.text).toContain('Prepare ABC-103 (1 skipped: ABC-101 still running)');
     expect(done.effects).toHaveLength(1);
     expect(done.effects[0]).toMatchObject({ type: 'resume', id: 'd1', cwd: '/repo' });
   });
@@ -97,16 +94,17 @@ describe('menu', () => {
     expect(open.menu).toBe(0);
     const fix = reduce(open, key('f'));
     expect(fix.state.menu).toBeNull();
-    expect(fix.state.confirm?.text).toContain('Fix CI on ABC-105?');
-    expect(fix.state.confirm?.text).toContain('ABC-103 CI pass');
+    expect(fix.state.message?.text).toContain('Fix CI on ABC-105');
+    expect(fix.state.message?.text).toContain('ABC-103 CI pass');
+    expect(fix.effects).toHaveLength(1);
     const down = reduce(open, { type: 'key', key: { name: 'down' } }).state;
     const ready = reduce(down, { type: 'key', key: { name: 'enter' } });
-    expect(ready.state.confirm?.text).toContain('Mark ready ABC-103, ABC-105?');
-    expect(reduce(ready.state, key('y')).effects).toEqual([
+    expect(ready.state.message?.text).toContain('Mark ready ABC-103, ABC-105');
+    expect(ready.effects).toEqual([
       { type: 'ready', cwd: '/repo', label: 'ABC-103', number: 2571, undo: false },
       { type: 'ready', cwd: '/repo', label: 'ABC-105', number: 2580, undo: false },
     ]);
-    const arm = reduce(reduce(open, key('a')).state, key('y'));
+    const arm = reduce(open, key('a'));
     expect(arm.effects).toEqual([
       { type: 'automerge', cwd: '/repo', label: 'ABC-103', number: 2571, on: true },
       { type: 'automerge', cwd: '/repo', label: 'ABC-105', number: 2580, on: true },
@@ -123,7 +121,7 @@ describe('menu', () => {
   test('a resumed session replaces its old row, keeps the cursor, and shows progress until it is working', () => {
     const old = ROWS.find((r) => r.id === 'd1')!;
     let s = { ...loaded(), selId: 'd1' };
-    s = reduce(reduce(s, key('p')).state, key('y')).state;
+    s = reduce(s, key('p')).state;
     expect(s.pending['ABC-103']).toMatchObject({ verb: 'preparing', waitFor: 'session' });
     expect(stripAnsi(screen(s).join('\n'))).toContain('preparing…');
     const fresh = row({ ...old, id: 'd2', sessionId: 'd2-x', state: 'working', startedAt: NOW + 1000 });

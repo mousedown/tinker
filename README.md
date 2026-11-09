@@ -99,7 +99,7 @@ tinker tidy [--all] [--dry-run]
 ### In the TUI
 
 Tick sessions, then act on all of them at once. With nothing ticked, a command acts on the
-highlighted row. Each command asks y/n once, names what it skips and why, then resumes each worker in
+highlighted row. Each command runs straight away, names what it skips and why, then resumes each worker in
 the background with `claude --bg --resume`, so it keeps its context. The row shows a spinner and what
 it is doing until the new session starts or the action finishes, and the resumed session takes the
 old one's place in the list (`f` shows every session).
