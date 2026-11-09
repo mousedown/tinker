@@ -140,6 +140,7 @@ tinker tui              # watch it run
 
 ```bash
 /plugin marketplace update tinker   # fetches the latest version
+claude plugin update tinker@tinker  # installs it
 /plugin uninstall tinker@tinker
 /plugin marketplace remove tinker
 rm ~/.local/bin/tinker              # if you linked it
