@@ -1,0 +1,117 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+REPO="${TINKER_REPO:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
+PREFIX="${TINKER_KEY_PREFIX:-}"
+ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+AGENT="${TINKER_AGENT:-tinker:tinker}"
+REVIEW="${TINKER_REVIEW:-}"
+TAG="🐙"
+
+usage() {
+  cat <<'EOF'
+Usage:
+  tinker <issue>... [--note "text"] [--repo PATH] [--dry-run]
+  tinker status [--all]
+  tinker tui [--plain]
+
+An issue is a tracker key (ABC-123), a GitHub issue number or URL (42, #42, https://…/issues/42),
+or a quoted description. With TINKER_KEY_PREFIX=ABC set, a bare number means ABC-<n> instead.
+Each issue becomes one background session, started in the current repo (or --repo / TINKER_REPO):
+claude --bg --agent tinker:tinker.
+
+Self-review defaults to Claude Code's /code-review --fix; set TINKER_REVIEW (e.g. "/my-review --fix")
+to use another review command.
+EOF
+}
+
+sessions() {
+  claude agents --json ${1:+--all} 2>/dev/null | jq -c --arg tag "$TAG" '[.[] | select(.kind == "background" and ((.name // "") | startswith($tag)))]'
+}
+
+status() {
+  local all="" rows
+  [ "${1:-}" = "--all" ] && all=1
+  rows=$(sessions "$all")
+  if [ "$(jq length <<<"$rows")" -eq 0 ]; then echo "No Little Tinker sessions."; return; fi
+  printf '%-9s %-12s %-9s %-22s %-6s %s\n' ID ISSUE STATE PR AGE NAME
+  jq -r '.[] | [.id, .sessionId, .cwd, .state, (.startedAt|tostring), .name] | @tsv' <<<"$rows" |
+    while IFS=$'\t' read -r id sid cwd state started name; do
+      key=$(grep -oE '[A-Z][A-Z0-9]+-[0-9]+' <<<"$name" | head -1 || true)
+      pr="-"
+      if [ -n "$key" ] && [ -d "$cwd" ]; then
+        pr=$(cd "$cwd" && gh pr list --state all --search "$key in:title" --json number,isDraft,state \
+          --jq 'first | if . == null then "-" else "#\(.number) \(if .state == "MERGED" then "merged" elif .state == "CLOSED" then "closed" elif .isDraft then "draft" else "ready" end)" end' 2>/dev/null || echo "-")
+      fi
+      mins=$(( ( $(date +%s) - started / 1000 ) / 60 ))
+      if [ $mins -ge 1440 ]; then age="$((mins / 1440))d"; elif [ $mins -ge 60 ]; then age="$((mins / 60))h"; else age="${mins}m"; fi
+      printf '%-9s %-12s %-9s %-22s %-6s %s\n' "$id" "${key:--}" "$state" "$pr" "$age" "$name"
+    done
+}
+
+launch() {
+  local note="" dry=0 issues=()
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --note) note="$2"; shift 2 ;;
+      --repo) REPO="$2"; shift 2 ;;
+      --dry-run) dry=1; shift ;;
+      -h|--help) usage; exit 0 ;;
+      *) issues+=("$1"); shift ;;
+    esac
+  done
+  [ ${#issues[@]} -gt 0 ] || { usage; exit 1; }
+  [ -d "$REPO" ] || { echo "No repo at $REPO" >&2; exit 1; }
+
+  local live seen=" "
+  live=$(sessions | jq -r '.[] | select(.state != "done") | .name')
+
+  for raw in "${issues[@]}"; do
+    issue="$raw"
+    [[ "$issue" =~ ^#?[0-9]+$ ]] && { if [ -n "$PREFIX" ]; then issue="$PREFIX-${issue#\#}"; else issue="#${issue#\#}"; fi; }
+    issue_uc=$(tr '[:lower:]' '[:upper:]' <<<"$issue")
+    [[ "$issue_uc" =~ ^[A-Z][A-Z0-9]+-[0-9]+$ ]] && issue="$issue_uc"
+
+    if [[ "$seen" == *" $issue "* ]]; then continue; fi
+    seen+="$issue "
+
+    if [[ "$issue" =~ ^[A-Z][A-Z0-9]+-[0-9]+$ ]]; then
+      label="$issue"
+      prompt="Fix $issue."
+    elif [[ "$issue" =~ ^#([0-9]+)$ ]]; then
+      label="GH-${BASH_REMATCH[1]}"
+      prompt="Fix GitHub issue #${BASH_REMATCH[1]} in this repository."
+    elif [[ "$issue" =~ github\.com/.+/issues/([0-9]+) ]]; then
+      label="GH-${BASH_REMATCH[1]}"
+      prompt="Fix the GitHub issue $issue."
+    else
+      label=$(cut -c1-40 <<<"$issue")
+      prompt="Fix this issue: $issue"
+    fi
+    [ -n "$note" ] && { [[ "$prompt" == *. ]] || prompt+="."; prompt+=" $note"; }
+    [ -n "$REVIEW" ] && { [[ "$prompt" == *. ]] || prompt+="."; prompt+=" Self-review with $REVIEW."; }
+
+    if [ -n "$live" ] && grep -qF -- "$label" <<<"$live"; then
+      printf '%s\tskipped\ta live Little Tinker session already has it\n' "$label"; continue
+    fi
+
+    name="$TAG $label"
+    if [ "$dry" -eq 1 ]; then
+      printf '%s\tdry-run\tcd "%s" && claude --bg --agent %s -n "%s" "%s"\n' "$label" "$REPO" "$AGENT" "$name" "$prompt"
+      continue
+    fi
+    if out=$(cd "$REPO" && claude --bg --agent "$AGENT" -n "$name" "$prompt" 2>&1); then
+      id=$(grep -oE '[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}|\b[0-9a-f]{8}\b' <<<"$out" | head -1 || true)
+      printf '%s\tlaunched\t%s\n' "$label" "${id:-$(tr '\n' ' ' <<<"$out")}"
+    else
+      printf '%s\tfailed\t%s\n' "$label" "$(tr '\n' ' ' <<<"$out")"
+    fi
+  done
+}
+
+case "${1:-}" in
+  ""|-h|--help) usage ;;
+  status) shift; status "$@" ;;
+  tui) shift; exec bun "$ROOT/tui/main.ts" "$@" ;;
+  *) launch "$@" ;;
+esac

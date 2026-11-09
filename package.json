@@ -1,0 +1,19 @@
+{
+  "name": "tinker",
+  "version": "0.3.0",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "tinker": "bin/tinker"
+  },
+  "scripts": {
+    "tui": "bun tui/main.ts",
+    "typecheck": "tsc --noEmit -p tui",
+    "test": "bun test"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.4.4",
+    "typescript": "^7.0.2"
+  }
+}
