@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { checksUrlOf, countChecks } from '../tui/data';
+import { activityOf, checksUrlOf, countChecks, describeTool } from '../tui/data';
 import { inline, markdown } from '../tui/markdown';
 import { stripAnsi } from '../tui/render/text';
 import { DEFAULTS } from '../tui/settings';
@@ -192,5 +192,26 @@ describe('markdown', () => {
     expect(lines).toContain('  code');
     expect(lines).toContain('a │ b');
     expect(lines).toContain('1 │ 2');
+  });
+});
+
+describe('running status', () => {
+  test('the latest tool call or message is the activity, with its time', () => {
+    const at = '2026-11-09T15:53:29.238Z';
+    const jsonl = [
+      JSON.stringify({ type: 'assistant', timestamp: '2026-11-09T15:50:00Z', message: { content: [{ type: 'text', text: 'Merging main in.' }] } }),
+      JSON.stringify({ type: 'assistant', timestamp: at, message: { content: [{ type: 'tool_use', name: 'Bash', input: { command: 'bun run check', description: 'Run lint and typecheck' } }] } }),
+      JSON.stringify({ type: 'user', timestamp: at, message: { content: [{ type: 'tool_result' }] } }),
+    ].join('\n');
+    expect(activityOf(jsonl)).toEqual({ text: 'Run lint and typecheck', at: Date.parse(at) });
+    expect(describeTool('Edit', { file_path: '/a/b/tutor-transfers.ts' })).toBe('Edit tutor-transfers.ts');
+    expect(describeTool('mcp__github__create_pr', {})).toBe('create_pr');
+  });
+
+  test('a working row shows what it is doing and for how long', () => {
+    const w = row({ id: 'w9', key: 'ABC-300', label: 'ABC-300', state: 'working', activity: { text: 'Run lint and typecheck', at: NOW - 40_000 } });
+    const text = stripAnsi(screen(loaded([w])).join('\n'));
+    expect(text).toContain('Run lint and typecheck  40s');
+    expect(text).toMatch(/[◐◓◑◒] working/);
   });
 });

@@ -21,10 +21,10 @@ export function stateCell(r: Row, state: State): Seg[] {
   const now = state.now;
   const pending = pendingOf(state, r);
   if (pending && !(pending.waitFor === 'session' && r.state === 'working'))
-    return [[`${SPIN[Math.floor(now / 1000) % SPIN.length]} ${pending.verb}…`, SKY]];
+    return [[`${SPIN[Math.floor(now / 500) % SPIN.length]} ${pending.verb}…`, SKY]];
   if (r.verdict?.kind === 'PARKED' && !isLive(r)) return [['◆ parked', BRASS]];
   if (r.state === 'blocked') return [['◆ needs you', BRASS]];
-  if (r.state === 'working') return [['● working', SKY]];
+  if (r.state === 'working') return [[`${SPIN[Math.floor(now / 500) % SPIN.length]} working`, SKY]];
   const tidy = tidyOf(r, now);
   if (tidy) return [[`⌫ ${tidy}`, MAGENTA]];
   if (r.state === 'failed') return [['✕ failed', RED]];
@@ -82,6 +82,11 @@ function whatCell(r: Row, state?: State): Seg[] {
   if (pending) {
     const secs = Math.max(0, Math.round((state!.now - pending.since) / 1000));
     return [[`${pending.verb}, ${secs}s · ${pending.waitFor === 'session' ? 'waiting for the session to start' : 'running'}`, SKY]];
+  }
+  if (r.state === 'working' && r.activity && state) {
+    const secs = Math.max(0, Math.round((state.now - r.activity.at) / 1000));
+    const ago = secs < 90 ? `${secs}s` : `${Math.round(secs / 60)}m`;
+    return [[r.activity.text, INK], [`  ${ago}`, secs > 300 ? BRASS : DIM]];
   }
   if (r.verdict && !isLive(r))
     return [
@@ -241,7 +246,8 @@ function detailScreen(state: State, r: Row): string[] {
         ? [...ciCell(r), ['   ', null], [`${ci.pass} passed · ${ci.fail} failed · ${ci.pending} running`, INK2, r.pr.checksUrl]]
         : [['none yet', DIM]]
     ),
-    field('verdict', r.verdict ? whatCell(r) : [['none yet', DIM]]),
+    ...(r.state === 'working' && r.activity ? [field('now', whatCell(r, state))] : []),
+    field('verdict', r.verdict && !isLive(r) ? whatCell(r) : [['none yet', DIM]]),
     '',
     paint([['  Latest from the worker', BOLD]], w),
   ];

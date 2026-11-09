@@ -47,9 +47,9 @@ export async function loadRows(force = false): Promise<Row[]> {
   const byRoot = new Map(await Promise.all(roots.map(async (r) => [r, await prsFor(r, force)] as const)));
   const prs = new Map([...rootOf].map(([cwd, root]) => [cwd, byRoot.get(root) ?? []] as const));
   return list.map((s) => {
-    const { verdict, said } = transcript(s);
+    const { verdict, said, activity } = transcript(s);
     const key = issueKey(s.name);
-    return { ...s, key, label: labelOf(s.name), verdict, said, pr: prFor(key, prs.get(s.cwd) ?? [], verdict) };
+    return { ...s, key, label: labelOf(s.name), verdict, said, activity, pr: prFor(key, prs.get(s.cwd) ?? [], verdict) };
   });
 }
 
@@ -205,6 +205,7 @@ async function main(): Promise<void> {
 
   const stop = () => {
     clearInterval(timer);
+    clearInterval(ticker);
     process.stdout.off('resize', onResize);
     process.stdin.off('data', onData);
     term.leave();
@@ -297,6 +298,10 @@ async function main(): Promise<void> {
     void refresh();
     void measure();
   }, POLL_MS);
+  const ticker = setInterval(() => {
+    state = { ...state, now: Date.now() };
+    draw();
+  }, 500);
 
   await finished;
   release();

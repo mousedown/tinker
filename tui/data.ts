@@ -42,12 +42,18 @@ export interface Verdict {
   text: string;
 }
 
+export interface Activity {
+  text: string;
+  at: number;
+}
+
 export interface Row extends Session {
   key: string | null;
   label: string;
   pr: Pr | null;
   verdict: Verdict | null;
   said: string[];
+  activity?: Activity | null;
 }
 
 async function run(cmd: string[], cwd?: string): Promise<string> {
@@ -231,6 +237,61 @@ export function assistantTexts(jsonl: string): string[] {
   return texts;
 }
 
+function short(text: string, max = 80): string {
+  const line = text.split('\n').find((l) => l.trim())?.trim() ?? '';
+  return line.length > max ? `${line.slice(0, max - 1)}…` : line;
+}
+
+function base(path: unknown): string {
+  return typeof path === 'string' ? path.split('/').filter(Boolean).pop() ?? path : '';
+}
+
+export function describeTool(name: string, input: Record<string, unknown> | undefined): string {
+  const i = input ?? {};
+  const str = (k: string) => (typeof i[k] === 'string' ? (i[k] as string) : '');
+  switch (name) {
+    case 'Bash':
+      return `${short(str('description') || str('command'))}`;
+    case 'Read':
+    case 'Edit':
+    case 'Write':
+    case 'NotebookEdit':
+      return `${name} ${base(i.file_path ?? i.notebook_path)}`;
+    case 'Grep':
+    case 'Glob':
+      return `${name} ${short(str('pattern'), 40)}`;
+    case 'Skill':
+      return `Skill ${str('skill')}`;
+    case 'Agent':
+    case 'Task':
+      return `Agent ${short(str('description'), 50)}`;
+    case 'TaskUpdate':
+    case 'TaskCreate':
+      return short(str('subject') || str('activeForm') || name);
+    default:
+      return name.replace(/^mcp__[^_]+__/, '');
+  }
+}
+
+export function activityOf(jsonl: string): Activity | null {
+  let last: Activity | null = null;
+  for (const line of jsonl.split('\n')) {
+    if (!line.includes('"assistant"')) continue;
+    try {
+      const entry = JSON.parse(line);
+      if (entry.type !== 'assistant' || !Array.isArray(entry.message?.content)) continue;
+      const at = Date.parse(entry.timestamp ?? '') || 0;
+      for (const part of entry.message.content) {
+        if (part?.type === 'tool_use') last = { text: describeTool(part.name, part.input), at };
+        else if (part?.type === 'text' && part.text?.trim()) last = { text: short(part.text), at };
+      }
+    } catch {
+      continue;
+    }
+  }
+  return last;
+}
+
 export function verdictOf(texts: string[]): Verdict | null {
   for (let i = texts.length - 1; i >= 0; i--) {
     const lines = texts[i].split('\n').reverse();
@@ -242,14 +303,15 @@ export function verdictOf(texts: string[]): Verdict | null {
   return null;
 }
 
-export function transcript(s: Session): { verdict: Verdict | null; said: string[] } {
+export function transcript(s: Session): { verdict: Verdict | null; said: string[]; activity: Activity | null } {
   const path = transcriptPath(s);
-  if (!path) return { verdict: null, said: [] };
+  if (!path) return { verdict: null, said: [], activity: null };
   try {
-    const texts = assistantTexts(tail(path));
-    return { verdict: verdictOf(texts), said: texts.slice(-6) };
+    const jsonl = tail(path);
+    const texts = assistantTexts(jsonl);
+    return { verdict: verdictOf(texts), said: texts.slice(-6), activity: activityOf(jsonl) };
   } catch {
-    return { verdict: null, said: [] };
+    return { verdict: null, said: [], activity: null };
   }
 }
 
