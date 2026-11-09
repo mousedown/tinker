@@ -77,6 +77,23 @@ issue-to-draft-PR job.
 
 ## Install
 
+Tinker isn't in the official Anthropic plugin directory. This repo is its own plugin marketplace,
+so you add it by its GitHub name.
+
+### 1. Prerequisites
+
+| Tool | Why | Check |
+|---|---|---|
+| [Claude Code](https://docs.claude.com/en/docs/claude-code) | Runs the workers (`claude --bg`, `claude agents`) | `claude --version` |
+| [GitHub CLI](https://cli.github.com) | Reads issues, opens draft PRs and reads CI, so it must be logged in | `gh auth status` |
+| [jq](https://jqlang.org) | Used by the `tinker` launcher | `jq --version` |
+| [Bun](https://bun.sh) | Needed only for `tinker tui`. It has no packages to install. | `bun --version` |
+
+For Jira keys (`ABC-123`), the worker reads the ticket through whatever Jira access your Claude Code
+already has, such as the Atlassian MCP server. GitHub issues and plain descriptions only need `gh`.
+
+### 2. Install the plugin
+
 In Claude Code:
 
 ```bash
@@ -84,8 +101,60 @@ In Claude Code:
 /plugin install tinker@tinker
 ```
 
-To get the `tinker` command in your shell too, link the launcher onto your `PATH`, for example
-`ln -s ~/.claude/plugins/marketplaces/tinker/bin/tinker ~/.local/bin/tinker`.
+Or from your shell:
+
+```bash
+claude plugin marketplace add mousedown/tinker
+claude plugin install tinker@tinker
+```
+
+This installs the `/tinker` skill and the `tinker:tinker` worker agent. Restart Claude Code (or run
+`/reload-plugins`) and check that `/tinker` appears in `/help`.
+
+### 3. Optional: add `tinker` to your shell
+
+`/tinker` covers launching from inside Claude Code. To run `tinker status` and `tinker tui` from a
+plain terminal, link the launcher from the marketplace's checkout onto your `PATH`:
+
+```bash
+mkdir -p ~/.local/bin
+ln -sf ~/.claude/plugins/marketplaces/tinker/bin/tinker ~/.local/bin/tinker
+tinker --help
+```
+
+Link to `marketplaces/tinker`, not `cache/tinker/tinker/<version>`. The cached copy moves to a new
+folder with each version, so a link to it breaks after an update. If `~/.local/bin` isn't already on
+your `PATH`, add `export PATH="$HOME/.local/bin:$PATH"` to your shell profile.
+
+### 4. Try it
+
+From inside the repo you want fixed:
+
+```bash
+tinker 42 --dry-run     # shows the session it would start and starts nothing
+/tinker 42              # or launch it from Claude Code
+tinker tui              # watch it run
+```
+
+### Updating and removing
+
+```bash
+/plugin marketplace update tinker   # fetches the latest version
+/plugin uninstall tinker@tinker
+/plugin marketplace remove tinker
+rm ~/.local/bin/tinker              # if you linked it
+```
+
+### Working on Tinker itself
+
+Point the marketplace at your clone and Claude Code will load your local changes:
+
+```bash
+git clone https://github.com/mousedown/tinker && cd tinker
+claude plugin marketplace add "$PWD"
+claude plugin install tinker@tinker
+ln -sf "$PWD/bin/tinker" ~/.local/bin/tinker
+```
 
 ## Usage
 
@@ -101,8 +170,6 @@ tinker tui [--plain]
 | `TINKER_KEY_PREFIX` | Makes a bare number mean `<PREFIX>-<n>` instead of a GitHub issue |
 | `TINKER_REVIEW` | Self-review command, e.g. `/my-review --fix` (default: Claude Code's built-in `/code-review --fix`, or whatever the repo's CLAUDE.md names) |
 | `TINKER_AGENT` | Worker agent (default `tinker:tinker`) |
-
-Requires `claude`, `gh`, `jq`, and `bun` for the TUI.
 
 ## Development
 
