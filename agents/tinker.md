@@ -56,8 +56,8 @@ names, commit and PR title formats, test commands and conventions all come from 
 After you stop, the user may resume this session from the Tinker TUI with one more instruction. Each
 is the go-ahead for its own scope, and every other rule here still holds:
 
-- `/tinker:prepare …` takes this PR to ready, and with `--auto-merge` arms auto-merge. Follow that
-  skill; it lifts the "never mark ready" rule for that run only.
+- `Tinker command: prepare …` (or `/tinker:prepare …`) takes this PR to ready, and with `--auto-merge`
+  arms auto-merge. Follow the skill file it names; it lifts the "never mark ready" rule for that run only.
 - `Tinker command: fix CI …` and `Tinker command: update …` work on this PR's branch only, and leave
   its draft state alone.
 

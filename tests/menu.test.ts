@@ -3,7 +3,8 @@ import { checksUrlOf, countChecks } from '../tui/data';
 import { inline, markdown } from '../tui/markdown';
 import { stripAnsi } from '../tui/render/text';
 import { DEFAULTS } from '../tui/settings';
-import { STALE_MS, initialState, preparePrompt, reduce, relaunchArgs, tidyOf, visible, type State } from '../tui/state';
+import { existsSync } from 'fs';
+import { PREPARE_SKILL, STALE_MS, initialState, preparePrompt, reduce, relaunchArgs, tidyOf, visible, type State } from '../tui/state';
 import { ciBar, screen } from '../tui/view';
 import { NOW, ROWS, pr, row } from './fixtures';
 
@@ -68,17 +69,21 @@ describe('menu', () => {
     const s = { ...loaded(), marks: ['d1', 'w1'] };
     const done = reduce(s, key('p'));
     expect(done.state.confirm).toBeNull();
-    expect(done.state.message?.text).toContain('Prepare ABC-103 (1 skipped: ABC-101 still running)');
+    expect(done.state.message?.text).toContain('Prepare ABC-103 (1 skipped: ABC-101 still working)');
     expect(done.effects).toHaveLength(1);
     expect(done.effects[0]).toMatchObject({ type: 'resume', id: 'd1', cwd: '/repo' });
   });
 
   test('prepare carries the sticky toggles as flags', () => {
     const d1 = ROWS.find((r) => r.id === 'd1')!;
-    expect(preparePrompt(d1, DEFAULTS, undefined)).toBe('/tinker:prepare for PR #2571 on branch fix/ABC-103');
-    expect(preparePrompt(d1, { draft: true, autoMerge: true, autoTidy: false }, '/pullbot --fix')).toBe(
-      '/tinker:prepare --draft --auto-merge --review "/pullbot --fix" for PR #2571 on branch fix/ABC-103'
+    expect(preparePrompt(d1, DEFAULTS, undefined, '/t/SKILL.md')).toStartWith(
+      'Tinker command: prepare for PR #2571 on branch fix/ABC-103. Read /t/SKILL.md and follow it with no flags.'
     );
+    expect(preparePrompt(d1, { draft: true, autoMerge: true, autoTidy: false }, '/pullbot --fix', '/t/SKILL.md')).toContain(
+      'follow it with --draft --auto-merge --review "/pullbot --fix".'
+    );
+    expect(PREPARE_SKILL).toEndWith('skills/prepare/SKILL.md');
+    expect(existsSync(PREPARE_SKILL)).toBe(true);
   });
 
   test('D, M and T flip the toggles and persist them', () => {

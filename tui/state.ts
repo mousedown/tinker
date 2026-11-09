@@ -1,3 +1,5 @@
+import { dirname, join } from 'path';
+import { fileURLToPath } from 'url';
 import type { Row } from './data';
 import type { MachineView } from './machine';
 import type { Key } from './runtime/keys';
@@ -57,7 +59,7 @@ export type Effect =
   | { type: 'attach'; id: string }
   | { type: 'stop'; id: string }
   | { type: 'launch'; args: string }
-  | { type: 'resume'; id: string; sessionId: string; cwd: string; name: string; label: string; prompt: string }
+  | { type: 'resume'; id: string; sessionId: string; cwd: string; name: string; label: string; prompt: string; stopFirst: boolean }
   | { type: 'cleanup'; id: string; ids: string[]; cwd: string; label: string; branch: string | null }
   | { type: 'automerge'; cwd: string; label: string; number: number; on: boolean }
   | { type: 'ready'; cwd: string; label: string; number: number; undo: boolean }
@@ -207,7 +209,7 @@ export interface CommandSpec {
 }
 
 function workerFree(r: Row): string | null {
-  return isLive(r) ? 'still running' : null;
+  return r.state === 'working' ? 'still working' : null;
 }
 
 function openPr(r: Row): string | null {
@@ -218,12 +220,14 @@ function openPr(r: Row): string | null {
 
 const END = ' End with the TINKER line, as the worker contract says.';
 
-export function preparePrompt(r: Row, settings: Settings, review = process.env.TINKER_REVIEW): string {
+export const PREPARE_SKILL = join(dirname(fileURLToPath(import.meta.url)), '..', 'skills', 'prepare', 'SKILL.md');
+
+export function preparePrompt(r: Row, settings: Settings, review = process.env.TINKER_REVIEW, skill = PREPARE_SKILL): string {
   const flags = [settings.draft ? '--draft' : '', settings.autoMerge ? '--auto-merge' : '', review ? `--review "${review}"` : '']
     .filter(Boolean)
     .join(' ');
   const where = r.pr ? ` for PR #${r.pr.number} on branch ${r.pr.branch}` : '';
-  return `/tinker:prepare${flags ? ` ${flags}` : ''}${where}`;
+  return `Tinker command: prepare${where}. Read ${skill} and follow it${flags ? ` with ${flags}` : ' with no flags'}.${END}`;
 }
 
 export function fixCiPrompt(r: Row): string {
@@ -254,7 +258,7 @@ export function relaunchArgs(r: Row): string | null {
 }
 
 function resume(r: Row, prompt: string): Effect {
-  return { type: 'resume', id: r.id, sessionId: r.sessionId, cwd: r.cwd, name: r.name, label: r.key ?? r.label, prompt };
+  return { type: 'resume', id: r.id, sessionId: r.sessionId, cwd: r.cwd, name: r.name, label: r.key ?? r.label, prompt, stopFirst: r.state === 'blocked' };
 }
 
 export const COMMANDS: Record<string, CommandSpec> = {
@@ -510,7 +514,7 @@ export function reduce(state: State, msg: Msg): Step {
       for (const [label, p] of Object.entries(state.pending)) {
         if (msg.now - p.since >= PENDING_MS) continue;
         const r = top.get(label);
-        if (p.waitFor === 'session' && r && isLive(r) && r.startedAt >= p.since - 5000) continue;
+        if (p.waitFor === 'session' && r && r.state === 'working') continue;
         if (p.waitFor === 'done' && !r) continue;
         pending[label] = p;
       }

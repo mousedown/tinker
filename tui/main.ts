@@ -93,6 +93,7 @@ function firstLine(text: string): string {
 export async function perform(effect: Extract<Effect, { type: 'resume' | 'cleanup' | 'automerge' | 'ready' }>): Promise<{ ok: boolean; text: string }> {
   switch (effect.type) {
     case 'resume': {
+      if (effect.stopFirst) await capture(['claude', 'stop', effect.id]);
       const r = await capture(['claude', '--bg', '--resume', effect.sessionId, '-n', effect.name, effect.prompt], effect.cwd);
       return { ok: r.ok, text: r.ok ? `${effect.label}: resumed in the background.` : `${effect.label}: ${firstLine(r.out) || 'resume failed'}` };
     }

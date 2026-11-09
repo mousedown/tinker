@@ -20,7 +20,7 @@ const SPIN = ['◐', '◓', '◑', '◒'];
 export function stateCell(r: Row, state: State): Seg[] {
   const now = state.now;
   const pending = pendingOf(state, r);
-  if (pending && !(pending.waitFor === 'session' && isLive(r) && r.startedAt >= pending.since - 5000))
+  if (pending && !(pending.waitFor === 'session' && r.state === 'working'))
     return [[`${SPIN[Math.floor(now / 1000) % SPIN.length]} ${pending.verb}…`, SKY]];
   if (r.verdict?.kind === 'PARKED' && !isLive(r)) return [['◆ parked', BRASS]];
   if (r.state === 'blocked') return [['◆ needs you', BRASS]];
