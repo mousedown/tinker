@@ -10,13 +10,20 @@ export type Tidy = 'merged' | 'closed' | 'stale';
 export type Group = 'needs' | 'live' | 'tidy' | 'done';
 
 export interface Input {
-  kind: 'new' | 'command';
+  kind: 'new';
   text: string;
 }
 
 export interface Confirm {
   text: string;
   effects: Effect[];
+  doing?: { labels: string[]; verb: string };
+}
+
+export interface Pending {
+  verb: string;
+  since: number;
+  waitFor: 'session' | 'done';
 }
 
 export interface State {
@@ -26,9 +33,11 @@ export interface State {
   view: View;
   input: Input | null;
   confirm: Confirm | null;
+  menu: number | null;
   marks: string[];
   settings: Settings;
   tidying: string[];
+  pending: Record<string, Pending>;
   machine: MachineView | null;
   message: { text: string; tone: Tone } | null;
   loaded: boolean;
@@ -41,7 +50,8 @@ export type Msg =
   | { type: 'rows'; rows: Row[]; now: number }
   | { type: 'key'; key: Key }
   | { type: 'resize'; width: number; height: number }
-  | { type: 'machine'; machine: MachineView }
+  | { type: 'machine'; machine: MachineView; now?: number }
+  | { type: 'done'; label: string }
   | { type: 'message'; text: string; tone: Tone };
 
 export type Effect =
@@ -49,8 +59,9 @@ export type Effect =
   | { type: 'stop'; id: string }
   | { type: 'launch'; args: string }
   | { type: 'resume'; id: string; sessionId: string; cwd: string; name: string; label: string; prompt: string }
-  | { type: 'cleanup'; id: string; cwd: string; label: string; branch: string | null }
-  | { type: 'automerge'; cwd: string; number: number; on: boolean }
+  | { type: 'cleanup'; id: string; ids: string[]; cwd: string; label: string; branch: string | null }
+  | { type: 'automerge'; cwd: string; label: string; number: number; on: boolean }
+  | { type: 'ready'; cwd: string; label: string; number: number; undo: boolean }
   | { type: 'settings'; settings: Settings }
   | { type: 'open'; url: string }
   | { type: 'refresh' }
@@ -69,9 +80,11 @@ export function initialState(width: number, height: number, settings: Settings =
     view: 'list',
     input: null,
     confirm: null,
+    menu: null,
     marks: [],
     settings: { ...settings },
     tidying: [],
+    pending: {},
     machine: null,
     message: null,
     loaded: false,
@@ -108,11 +121,40 @@ export function groupOf(r: Row, now: number): Group {
   return 'done';
 }
 
+export function labelOf(r: Row): string {
+  return r.key ?? r.label;
+}
+
+export function newest(rows: Row[]): Map<string, Row> {
+  const out = new Map<string, Row>();
+  for (const r of rows) {
+    const had = out.get(labelOf(r));
+    if (!had || r.startedAt > had.startedAt) out.set(labelOf(r), r);
+  }
+  return out;
+}
+
+export function siblings(rows: Row[], r: Row): string[] {
+  return rows.filter((x) => labelOf(x) === labelOf(r)).sort((a, b) => a.startedAt - b.startedAt).map((x) => x.id);
+}
+
+export const PENDING_MS = 90_000;
+
+export function pendingOf(state: State, r: Row): Pending | null {
+  const p = state.pending[labelOf(r)];
+  return p && state.now - p.since < PENDING_MS ? p : null;
+}
+
 export function visible(state: State): Row[] {
+  const top = newest(state.rows);
   const rows =
     state.filter === 'all'
       ? state.rows
-      : state.rows.filter((r) => isLive(r) || needsYou(r) || tidyOf(r, state.now) !== null || state.now - r.startedAt < DAY);
+      : state.rows.filter(
+          (r) =>
+            top.get(labelOf(r)) === r &&
+            (isLive(r) || needsYou(r) || tidyOf(r, state.now) !== null || pendingOf(state, r) !== null || state.now - r.startedAt < DAY)
+        );
   return [...rows].sort((a, b) => {
     const ra = needsYou(a) ? 0 : (RANK[a.state] ?? 5);
     const rb = needsYou(b) ? 0 : (RANK[b.state] ?? 5);
@@ -138,10 +180,6 @@ function say(state: State, text: string, tone: Tone = 'info'): State {
   return { ...state, message: { text, tone } };
 }
 
-export const HELP =
-  ':prepare · :fix-ci · :update · :cleanup · :relaunch · :automerge on|off · :tidy · :draft · :auto-merge · :auto-tidy · :q   ' +
-  'keys: space tick · * tick group · t tick tidy · u clear · p prepare · c clean up · i CI · D draft · M auto-merge · T auto-tidy';
-
 function toggleMark(state: State, row: Row): State {
   const marks = state.marks.includes(row.id) ? state.marks.filter((m) => m !== row.id) : [...state.marks, row.id];
   return { ...state, marks };
@@ -155,7 +193,7 @@ function markWhere(state: State, test: (r: Row) => boolean, empty: string): Stat
   return say({ ...state, marks }, all ? `Unticked ${ids.length}.` : `Ticked ${ids.length}.`);
 }
 
-function targets(state: State): Row[] {
+export function targets(state: State): Row[] {
   if (state.marks.length) return state.marks.map((id) => state.rows.find((r) => r.id === id)).filter((r): r is Row => Boolean(r));
   const row = selected(state);
   return row ? [row] : [];
@@ -165,6 +203,7 @@ type Plan = { ok: true; effect: Effect } | { ok: false; why: string };
 
 export interface CommandSpec {
   verb: string;
+  doing: string;
   plan: (r: Row, state: State) => Plan;
 }
 
@@ -222,6 +261,7 @@ function resume(r: Row, prompt: string): Effect {
 export const COMMANDS: Record<string, CommandSpec> = {
   prepare: {
     verb: 'Prepare',
+    doing: 'preparing',
     plan: (r, s) => {
       const why = workerFree(r) ?? (r.pr && r.pr.state !== 'OPEN' ? `PR ${r.pr.state.toLowerCase()}` : null);
       return why ? { ok: false, why } : { ok: true, effect: resume(r, preparePrompt(r, s.settings)) };
@@ -229,6 +269,7 @@ export const COMMANDS: Record<string, CommandSpec> = {
   },
   'fix-ci': {
     verb: 'Fix CI on',
+    doing: 'fixing CI',
     plan: (r) => {
       const why = workerFree(r) ?? openPr(r) ?? (r.pr!.ci === 'fail' ? null : `CI ${r.pr!.ci}`);
       return why ? { ok: false, why } : { ok: true, effect: resume(r, fixCiPrompt(r)) };
@@ -236,6 +277,7 @@ export const COMMANDS: Record<string, CommandSpec> = {
   },
   update: {
     verb: 'Update',
+    doing: 'updating',
     plan: (r) => {
       const why = workerFree(r) ?? openPr(r);
       return why ? { ok: false, why } : { ok: true, effect: resume(r, updatePrompt(r)) };
@@ -243,17 +285,17 @@ export const COMMANDS: Record<string, CommandSpec> = {
   },
   cleanup: {
     verb: 'Clean up',
+    doing: 'tidying',
     plan: (r, s) => {
       const tidy = tidyOf(r, s.now);
       if (!tidy) return { ok: false, why: isLive(r) ? 'still running' : r.pr ? 'PR still open' : 'not stale yet' };
-      return {
-        ok: true,
-        effect: { type: 'cleanup', id: r.id, cwd: r.cwd, label: r.key ?? r.label, branch: tidy === 'merged' ? r.pr!.branch : null },
-      };
+      if (s.rows.some((x) => labelOf(x) === labelOf(r) && isLive(x))) return { ok: false, why: 'another session for it is running' };
+      return { ok: true, effect: cleanupEffect(s, r, tidy) };
     },
   },
   relaunch: {
     verb: 'Relaunch',
+    doing: 'relaunching',
     plan: (r) => {
       if (isLive(r)) return { ok: false, why: 'still running' };
       const args = relaunchArgs(r);
@@ -262,12 +304,17 @@ export const COMMANDS: Record<string, CommandSpec> = {
   },
 };
 
+function cleanupEffect(s: State, r: Row, tidy: Tidy): Effect {
+  return { type: 'cleanup', id: r.id, ids: siblings(s.rows, r), cwd: r.cwd, label: labelOf(r), branch: tidy === 'merged' ? r.pr!.branch : null };
+}
+
 function automergeSpec(on: boolean): CommandSpec {
   return {
     verb: on ? 'Arm auto-merge on' : 'Disarm auto-merge on',
+    doing: on ? 'arming auto-merge' : 'disarming auto-merge',
     plan: (r) => {
       const why = openPr(r) ?? (r.pr!.autoMerge === on ? (on ? 'already armed' : 'not armed') : null);
-      return why ? { ok: false, why } : { ok: true, effect: { type: 'automerge', cwd: r.cwd, number: r.pr!.number, on } };
+      return why ? { ok: false, why } : { ok: true, effect: { type: 'automerge', cwd: r.cwd, label: labelOf(r), number: r.pr!.number, on } };
     },
   };
 }
@@ -288,7 +335,10 @@ export function apply(state: State, spec: CommandSpec): Step {
   }
   const note = skipped.length ? ` (${skipped.length} skipped: ${skipped.join(', ')})` : '';
   if (effects.length === 0) return { state: say(state, `Nothing to do${note}`, 'error'), effects: [] };
-  return { state: { ...state, confirm: { text: `${spec.verb} ${names.join(', ')}?${note} y/n`, effects } }, effects: [] };
+  return {
+    state: { ...state, confirm: { text: `${spec.verb} ${names.join(', ')}?${note} y/n`, effects, doing: { labels: names, verb: spec.doing } } },
+    effects: [],
+  };
 }
 
 function toggle(state: State, key: keyof Settings, label: string): Step {
@@ -303,44 +353,69 @@ export function autoTidy(state: State): Step {
   if (!state.settings.autoTidy) return { state, effects: [] };
   const effects: Effect[] = [];
   const tidying = [...state.tidying];
-  for (const r of state.rows) {
+  const pending = { ...state.pending };
+  for (const r of newest(state.rows).values()) {
     if (tidying.includes(r.id) || tidyOf(r, state.now) !== 'merged') continue;
+    if (state.rows.some((x) => labelOf(x) === labelOf(r) && isLive(x))) continue;
     tidying.push(r.id);
-    effects.push({ type: 'cleanup', id: r.id, cwd: r.cwd, label: r.key ?? r.label, branch: r.pr!.branch });
+    pending[labelOf(r)] = { verb: 'tidying', since: state.now, waitFor: 'done' };
+    effects.push(cleanupEffect(state, r, 'merged'));
   }
-  return { state: { ...state, tidying }, effects };
+  return { state: { ...state, tidying, pending }, effects };
 }
 
-function command(state: State, line: string): Step {
-  const [name = '', ...args] = line.trim().split(/\s+/);
-  const closed: State = { ...state, input: null };
-  if (!name) return { state: closed, effects: [] };
-  if (name === 'q' || name === 'quit') return { state: closed, effects: [{ type: 'quit' }] };
-  if (name === 'help') return { state: say(closed, HELP), effects: [] };
-  if (name === 'draft') return toggle(closed, 'draft', 'Stop at draft');
-  if (name === 'auto-merge') return toggle(closed, 'autoMerge', 'Auto-merge after prepare');
-  if (name === 'auto-tidy') return toggle(closed, 'autoTidy', 'Auto-tidy merged sessions');
-  if (name === 'automerge') {
-    if (args[0] !== 'on' && args[0] !== 'off') return { state: say(closed, ':automerge needs on or off', 'error'), effects: [] };
-    return apply(closed, automergeSpec(args[0] === 'on'));
-  }
-  if (name === 'tidy') return { state: markWhere(closed, (r) => tidyOf(r, state.now) !== null, 'Nothing to tidy.'), effects: [] };
-  const spec = COMMANDS[name];
-  if (spec) return apply(closed, spec);
-  return { state: say(closed, `Unknown command :${name}. Try :help`, 'error'), effects: [] };
+function readySpec(undo: boolean): CommandSpec {
+  return {
+    verb: undo ? 'Move back to draft' : 'Mark ready',
+    doing: undo ? 'moving to draft' : 'marking ready',
+    plan: (r) => {
+      const why = openPr(r) ?? (r.pr!.draft !== undo ? null : undo ? 'already a draft' : 'already ready');
+      return why ? { ok: false, why } : { ok: true, effect: { type: 'ready', cwd: r.cwd, label: labelOf(r), number: r.pr!.number, undo } };
+    },
+  };
+}
+
+export interface MenuItem {
+  key: string;
+  label: string;
+  hint: string;
+  spec: CommandSpec;
+}
+
+export const MENU: MenuItem[] = [
+  { key: 'p', label: 'Prepare', hint: 'merge the base, run checks, review at the head, then mark ready (D keeps it a draft)', spec: COMMANDS.prepare },
+  { key: 'r', label: 'Mark ready', hint: 'take the PR out of draft now: gh pr ready', spec: readySpec(false) },
+  { key: 'd', label: 'Back to draft', hint: 'gh pr ready --undo', spec: readySpec(true) },
+  { key: 'f', label: 'Fix CI', hint: 'read the failing checks, fix them, push', spec: COMMANDS['fix-ci'] },
+  { key: 'u', label: 'Update', hint: 'merge the base branch in; parks on real conflicts', spec: COMMANDS.update },
+  { key: 'a', label: 'Arm auto-merge', hint: 'GitHub merges it once required checks pass', spec: automergeSpec(true) },
+  { key: 'A', label: 'Disarm auto-merge', hint: 'gh pr merge --disable-auto', spec: automergeSpec(false) },
+  { key: 'c', label: 'Clean up', hint: 'remove the session and worktree, and the branch if merged', spec: COMMANDS.cleanup },
+  { key: 'l', label: 'Relaunch', hint: 'a fresh worker for the same issue', spec: COMMANDS.relaunch },
+];
+
+function reduceMenu(state: State, key: Key): Step {
+  const at = state.menu ?? 0;
+  const closed: State = { ...state, menu: null };
+  if (key.name === 'esc' || key.name === 'ctrl-c' || key.name === 'left' || (key.name === 'char' && (key.ch === 'm' || key.ch === ':' || key.ch === 'q')))
+    return { state: closed, effects: [] };
+  if (key.name === 'up' || (key.name === 'char' && key.ch === 'k')) return { state: { ...state, menu: (at + MENU.length - 1) % MENU.length }, effects: [] };
+  if (key.name === 'down' || (key.name === 'char' && key.ch === 'j')) return { state: { ...state, menu: (at + 1) % MENU.length }, effects: [] };
+  if (key.name === 'enter' || key.name === 'right') return apply(closed, MENU[at].spec);
+  const hit = key.name === 'char' ? MENU.find((m) => m.key === key.ch) : undefined;
+  if (hit) return apply(closed, hit.spec);
+  return { state, effects: [] };
 }
 
 function reduceInput(state: State, key: Key): Step {
   const input = state.input!;
   if (key.name === 'esc' || key.name === 'ctrl-c') return { state: { ...state, input: null }, effects: [] };
   if (key.name === 'enter') {
-    if (input.kind === 'command') return command(state, input.text);
     const args = input.text.trim();
     if (!args) return { state: { ...state, input: null }, effects: [] };
     return { state: say({ ...state, input: null }, `Launching ${args}…`), effects: [{ type: 'launch', args }] };
   }
   if (key.name === 'backspace') {
-    if (!input.text && input.kind === 'command') return { state: { ...state, input: null }, effects: [] };
     return { state: { ...state, input: { ...input, text: input.text.slice(0, -1) } }, effects: [] };
   }
   if (key.name === 'char' && key.ch) return { state: { ...state, input: { ...input, text: input.text + key.ch } }, effects: [] };
@@ -353,7 +428,13 @@ function reduceConfirm(state: State, key: Key): Step {
   if (key.name === 'char' && (key.ch === 'y' || key.ch === 'Y')) {
     const marks = confirm.effects.some((e) => e.type === 'stop') ? state.marks : [];
     const n = confirm.effects.length;
-    return { state: say({ ...cleared, marks }, n === 1 ? 'Working on it…' : `Working on ${n}…`), effects: confirm.effects };
+    const pending = { ...state.pending };
+    const waitFor = confirm.effects.some((e) => e.type === 'resume' || e.type === 'launch') ? 'session' : 'done';
+    for (const label of confirm.doing?.labels ?? []) pending[label] = { verb: confirm.doing!.verb, since: state.now, waitFor };
+    return {
+      state: say({ ...cleared, marks, pending }, n === 1 ? `${confirm.doing?.verb ?? 'Working'}…` : `${confirm.doing?.verb ?? 'Working'} ${n}…`),
+      effects: confirm.effects,
+    };
   }
   return { state: say(cleared, 'Cancelled.'), effects: [] };
 }
@@ -361,6 +442,7 @@ function reduceConfirm(state: State, key: Key): Step {
 function reduceKey(state: State, key: Key): Step {
   if (state.input !== null) return reduceInput(state, key);
   if (state.confirm) return reduceConfirm(state, key);
+  if (state.menu !== null) return reduceMenu(state, key);
 
   const row = selected(state);
   const ch = key.name === 'char' ? key.ch : undefined;
@@ -376,7 +458,10 @@ function reduceKey(state: State, key: Key): Step {
   if (key.name === 'tab' || ch === 'f')
     return { state: { ...fresh, filter: state.filter === 'active' ? 'all' : 'active' }, effects: [] };
   if (ch === 'n') return { state: { ...fresh, input: { kind: 'new', text: '' } }, effects: [] };
-  if (ch === ':') return { state: { ...fresh, input: { kind: 'command', text: '' } }, effects: [] };
+  if (ch === 'm' || ch === ':') {
+    if (targets(fresh).length === 0) return { state: say(fresh, 'Nothing selected.', 'error'), effects: [] };
+    return { state: { ...fresh, menu: 0 }, effects: [] };
+  }
   if (ch === 'r') return { state: say(fresh, 'Refreshing…'), effects: [{ type: 'refresh' }] };
   if (ch === 'u') return { state: say({ ...fresh, marks: [] }, 'Cleared the ticks.'), effects: [] };
   if (ch === 't') return { state: markWhere(fresh, (r) => tidyOf(r, state.now) !== null, 'Nothing to tidy.'), effects: [] };
@@ -422,13 +507,29 @@ function reduceKey(state: State, key: Key): Step {
 export function reduce(state: State, msg: Msg): Step {
   switch (msg.type) {
     case 'rows': {
+      const top = newest(msg.rows);
+      const follow = (id: string): string | null => {
+        const r = msg.rows.find((x) => x.id === id) ?? state.rows.find((x) => x.id === id);
+        return r ? (top.get(labelOf(r))?.id ?? null) : null;
+      };
+      const marks = [...new Set(state.marks.map(follow).filter((m): m is string => m !== null))];
+      const pending: Record<string, Pending> = {};
+      for (const [label, p] of Object.entries(state.pending)) {
+        if (msg.now - p.since >= PENDING_MS) continue;
+        const r = top.get(label);
+        if (p.waitFor === 'session' && r && isLive(r) && r.startedAt >= p.since - 5000) continue;
+        if (p.waitFor === 'done' && !r) continue;
+        pending[label] = p;
+      }
       const ids = new Set(msg.rows.map((r) => r.id));
       const next: State = {
         ...state,
         rows: msg.rows,
         loaded: true,
         now: msg.now,
-        marks: state.marks.filter((m) => ids.has(m)),
+        marks,
+        pending,
+        selId: state.selId ? (follow(state.selId) ?? state.selId) : null,
         tidying: state.tidying.filter((m) => ids.has(m)),
       };
       return autoTidy({ ...next, selId: selected(next)?.id ?? null });
@@ -436,7 +537,12 @@ export function reduce(state: State, msg: Msg): Step {
     case 'resize':
       return { state: { ...state, width: msg.width, height: msg.height }, effects: [] };
     case 'machine':
-      return { state: { ...state, machine: msg.machine }, effects: [] };
+      return { state: { ...state, machine: msg.machine, now: msg.now ?? state.now }, effects: [] };
+    case 'done': {
+      const pending = { ...state.pending };
+      delete pending[msg.label];
+      return { state: { ...state, pending }, effects: [] };
+    }
     case 'message':
       return { state: say(state, msg.text, msg.tone), effects: [] };
     case 'key':

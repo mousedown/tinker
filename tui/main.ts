@@ -7,6 +7,7 @@ import {
   labelOf,
   prFor,
   pulls,
+  repoRoot,
   sessions,
   transcript,
   withoutClaudeCode,
@@ -30,18 +31,21 @@ const PR_MS = 20000;
 
 const prCache = new Map<string, { at: number; prs: Pr[] }>();
 
-async function prsFor(cwd: string, force: boolean): Promise<Pr[]> {
-  const hit = prCache.get(cwd);
+async function prsFor(root: string, force: boolean): Promise<Pr[]> {
+  const hit = prCache.get(root);
   if (hit && !force && Date.now() - hit.at < PR_MS) return hit.prs;
-  const prs = await pulls(cwd);
-  prCache.set(cwd, { at: Date.now(), prs });
+  const prs = await pulls(root);
+  if (prs === null) return hit?.prs ?? [];
+  prCache.set(root, { at: Date.now(), prs });
   return prs;
 }
 
 export async function loadRows(force = false): Promise<Row[]> {
   const list = await sessions(true);
-  const cwds = [...new Set(list.map((s) => s.cwd))];
-  const prs = new Map(await Promise.all(cwds.map(async (c) => [c, await prsFor(c, force)] as const)));
+  const rootOf = new Map(await Promise.all([...new Set(list.map((s) => s.cwd))].map(async (c) => [c, await repoRoot(c)] as const)));
+  const roots = [...new Set(rootOf.values())];
+  const byRoot = new Map(await Promise.all(roots.map(async (r) => [r, await prsFor(r, force)] as const)));
+  const prs = new Map([...rootOf].map(([cwd, root]) => [cwd, byRoot.get(root) ?? []] as const));
   return list.map((s) => {
     const { verdict, said } = transcript(s);
     const key = issueKey(s.name);
@@ -86,7 +90,7 @@ function firstLine(text: string): string {
   return text.split('\n').find((l) => l.trim())?.trim() ?? '';
 }
 
-export async function perform(effect: Extract<Effect, { type: 'resume' | 'cleanup' | 'automerge' }>): Promise<{ ok: boolean; text: string }> {
+export async function perform(effect: Extract<Effect, { type: 'resume' | 'cleanup' | 'automerge' | 'ready' }>): Promise<{ ok: boolean; text: string }> {
   switch (effect.type) {
     case 'resume': {
       const r = await capture(['claude', '--bg', '--resume', effect.sessionId, '-n', effect.name, effect.prompt], effect.cwd);
@@ -95,6 +99,7 @@ export async function perform(effect: Extract<Effect, { type: 'resume' | 'cleanu
     case 'cleanup': {
       const common = await capture(['git', 'rev-parse', '--path-format=absolute', '--git-common-dir'], effect.cwd);
       const main = common.ok ? dirname(common.out.trim()) : null;
+      for (const id of effect.ids.filter((x) => x !== effect.id)) await capture(['claude', 'rm', id]);
       const r = await capture(['claude', 'rm', effect.id]);
       if (!r.ok) return { ok: false, text: `${effect.label}: ${firstLine(r.out) || 'claude rm failed'}` };
       if (effect.branch && main) {
@@ -104,6 +109,10 @@ export async function perform(effect: Extract<Effect, { type: 'resume' | 'cleanu
         if (has.ok && !checkedOut) await capture(['git', 'branch', '-D', effect.branch], main);
       }
       return { ok: true, text: `${effect.label}: tidied${effect.branch ? ` (session, worktree and ${effect.branch})` : ' (session and worktree)'}.` };
+    }
+    case 'ready': {
+      const r = await capture(['gh', 'pr', 'ready', String(effect.number), ...(effect.undo ? ['--undo'] : [])], effect.cwd);
+      return { ok: r.ok, text: r.ok ? `#${effect.number}: ${effect.undo ? 'back to draft' : 'ready for review'}.` : `#${effect.number}: ${firstLine(r.out) || 'gh pr ready failed'}` };
     }
     case 'automerge': {
       const args = effect.on ? ['gh', 'pr', 'merge', String(effect.number), '--auto', await mergeFlag(effect.cwd)] : ['gh', 'pr', 'merge', String(effect.number), '--disable-auto'];
@@ -227,9 +236,11 @@ async function main(): Promise<void> {
         return;
       case 'resume':
       case 'cleanup':
+      case 'ready':
       case 'automerge': {
         const r = await perform(effect);
         dispatch({ type: 'message', text: r.text, tone: r.ok ? 'info' : 'error' });
+        if (effect.type !== 'resume' || !r.ok) dispatch({ type: 'done', label: effect.label });
         await refresh(true);
         return;
       }
@@ -275,7 +286,7 @@ async function main(): Promise<void> {
   void refresh();
   const measure = async () => {
     try {
-      dispatch({ type: 'machine', machine: await sample() });
+      dispatch({ type: 'machine', machine: await sample(), now: Date.now() });
     } catch {
       return;
     }

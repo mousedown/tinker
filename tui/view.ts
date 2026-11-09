@@ -5,7 +5,7 @@ import { crumbs, keyLines, paint, type Hint } from './render/paint';
 import { headerRow, layout, tableRow, type Column } from './render/table';
 import type { Seg } from './render/text';
 import { BOLD, BRASS, DIM, GREEN, INK, INK2, MAGENTA, RED, SKY } from './render/theme';
-import { isLive, needsYou, selected, tidyOf, visible, type State } from './state';
+import { MENU, isLive, needsYou, newest, pendingOf, selected, targets, tidyOf, visible, type State } from './state';
 import { machineStrip } from './strip';
 
 export function age(ms: number): string {
@@ -15,7 +15,13 @@ export function age(ms: number): string {
   return `${Math.floor(mins / 1440)}d`;
 }
 
-export function stateCell(r: Row, now: number): Seg[] {
+const SPIN = ['◐', '◓', '◑', '◒'];
+
+export function stateCell(r: Row, state: State): Seg[] {
+  const now = state.now;
+  const pending = pendingOf(state, r);
+  if (pending && !(pending.waitFor === 'session' && isLive(r) && r.startedAt >= pending.since - 5000))
+    return [[`${SPIN[Math.floor(now / 1000) % SPIN.length]} ${pending.verb}…`, SKY]];
   if (r.verdict?.kind === 'PARKED' && !isLive(r)) return [['◆ parked', BRASS]];
   if (r.state === 'blocked') return [['◆ needs you', BRASS]];
   if (r.state === 'working') return [['● working', SKY]];
@@ -71,8 +77,13 @@ export function ciCell(r: Row): Seg[] {
   return [...bar, figure];
 }
 
-function whatCell(r: Row): Seg[] {
-  if (r.verdict)
+function whatCell(r: Row, state?: State): Seg[] {
+  const pending = state ? pendingOf(state, r) : null;
+  if (pending) {
+    const secs = Math.max(0, Math.round((state!.now - pending.since) / 1000));
+    return [[`${pending.verb}, ${secs}s · ${pending.waitFor === 'session' ? 'waiting for the session to start' : 'running'}`, SKY]];
+  }
+  if (r.verdict && !isLive(r))
     return [
       [`${r.verdict.kind} `, r.verdict.kind === 'DONE' ? GREEN : BRASS],
       [r.verdict.text.replace(/https:\/\/github\.com\/[^\s]+\/pull\/(\d+)/g, '#$1'), INK2],
@@ -92,7 +103,7 @@ const COLUMNS: Column[] = [
 ];
 
 function summary(state: State): Seg[] {
-  const rows = state.rows;
+  const rows = [...newest(state.rows).values()];
   const need = rows.filter(needsYou).length;
   const working = rows.filter((r) => r.state === 'working').length;
   const tidy = rows.filter((r) => tidyOf(r, state.now)).length;
@@ -106,6 +117,8 @@ function summary(state: State): Seg[] {
   if (working) add([`● ${working} working`, SKY]);
   if (done) add([`✓ ${done} done`, GREEN]);
   if (tidy) add([`⌫ ${tidy} to tidy`, MAGENTA]);
+  const busy = visible(state).filter((r) => pendingOf(state, r)).length;
+  if (busy) add([`⟳ ${busy} in progress`, SKY]);
   if (state.marks.length) add([`☑ ${state.marks.length} ticked`, BOLD]);
   if (!parts.length) parts.push(['nothing running', DIM]);
   parts.push(['   ', null], [state.filter === 'active' ? 'active' : 'all sessions', DIM]);
@@ -145,8 +158,18 @@ function header(state: State, steps: string[]): Seg[][] {
 function footer(state: State, hints: [Hint[], Hint[]]): Seg[][] {
   if (state.input?.kind === 'new')
     return [[['New issue › ', SKY], [state.input.text, BOLD], ['█', SKY]], [['ABC-123 · 42 · issue URL · "a description" · --note "…"   enter launch · esc cancel', DIM]]];
-  if (state.input?.kind === 'command')
-    return [[[':', BOLD], [state.input.text, BOLD], ['█', SKY]], [['prepare · fix-ci · update · cleanup · relaunch · automerge on|off · tidy · help   enter run · esc cancel', DIM]]];
+  if (state.menu !== null) {
+    const names = targets(state).map((r) => r.key ?? r.label);
+    const what = state.marks.length ? `${names.length} ticked: ${names.join(', ')}` : names[0] ?? '';
+    return [
+      [['Act on ', DIM], [what, BOLD]],
+      ...MENU.map((item, i): Seg[] => {
+        const on = i === state.menu;
+        return [[on ? '› ' : '  ', on ? SKY : null], [item.key, BOLD], ['  ', null], [item.label.padEnd(18), on ? SKY : INK], [item.hint, DIM]];
+      }),
+      [['↑↓ choose · enter or the letter runs it · esc closes', DIM]],
+    ];
+  }
   if (state.confirm) return [[[state.confirm.text, BRASS]], []];
   const msg: Seg[] = state.message ? [[state.message.text, state.message.tone === 'error' ? RED : BRASS]] : [];
   return [msg, ...keyLines(hints[0], hints[1], state.width - 2)];
@@ -160,12 +183,12 @@ function fill(lines: string[], height: number): string[] {
 function cells(state: State, r: Row, color: boolean): Record<string, Seg[]> {
   return {
     mark: state.marks.includes(r.id) ? [['☑', BOLD]] : [[' ', null]],
-    state: stateCell(r, state.now),
+    state: stateCell(r, state),
     issue: [[r.key ?? r.label, color && isLive(r) ? BOLD : color ? INK : null]],
     pr: prCell(r),
     ci: ciCell(r),
     age: [[age(state.now - r.startedAt), DIM]],
-    what: whatCell(r),
+    what: whatCell(r, state),
   };
 }
 
@@ -174,7 +197,7 @@ function listScreen(state: State): string[] {
   const top = header(state, ['sessions']).map((l) => paint(l, w));
   const bottom = footer(state, [
     [['↑↓', 'select'], ['space', 'tick'], ['*', 'tick group'], ['t', 'tick tidy'], ['enter', 'open']],
-    [['p', 'prepare'], ['c', 'clean up'], [':', 'commands'], ['a', 'attach'], ['o', 'PR'], ['i', 'CI'], ['n', 'new'], ['x', 'stop'], ['f', state.filter === 'active' ? 'all' : 'active'], ['q', 'quit']],
+    [['m', 'menu'], ['p', 'prepare'], ['c', 'clean up'], ['a', 'attach'], ['o', 'PR'], ['i', 'CI'], ['n', 'new'], ['x', 'stop'], ['f', state.filter === 'active' ? 'all' : 'active'], ['q', 'quit']],
   ]).map((l) => paint(l, w));
 
   const cols = layout(COLUMNS, w - 2);
@@ -201,13 +224,13 @@ function detailScreen(state: State, r: Row): string[] {
   const top = header(state, ['sessions', r.key ?? r.label]).map((l) => paint(l, w));
   const bottom = footer(state, [
     [['esc', 'back'], ['↑↓', 'prev/next']],
-    [['enter', 'attach'], ['p', 'prepare'], [':', 'commands'], ['o', 'PR'], ['i', 'CI'], ['x', 'stop'], ['q', 'quit']],
+    [['enter', 'attach'], ['m', 'menu'], ['p', 'prepare'], ['o', 'PR'], ['i', 'CI'], ['x', 'stop'], ['q', 'quit']],
   ]).map((l) => paint(l, w));
 
   const field = (label: string, value: Seg[]): string => paint([[`  ${label.padEnd(9)}`, DIM], ...value], w);
   const ci = r.pr?.checks;
   const body: string[] = [
-    field('state', stateCell(r, state.now)),
+    field('state', stateCell(r, state)),
     field('session', [[`${r.id}`, INK], ['  ', null], [`claude attach ${r.id}`, DIM]]),
     field('started', [[`${age(state.now - r.startedAt)} ago`, INK]]),
     field('repo', [[r.cwd.replace(process.env.HOME ?? '~', '~'), INK2]]),

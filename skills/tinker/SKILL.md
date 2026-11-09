@@ -48,8 +48,8 @@ attach. A finished worker's verdict is the last line of its session, `TINKER DON
 you, its PR and CI, and the worker's verdict. It needs a real terminal, so tell the user to run it
 themselves (`! tinker tui` does not work: it is interactive).
 
-In the TUI, space ticks sessions and `p` (prepare), `c` (clean up) or `:` commands (`fix-ci`, `update`,
-`relaunch`, `automerge on|off`) act on all of them; `D`, `M` and `T` toggle stop-at-draft, auto-merge
+In the TUI, space ticks sessions and `p` (prepare), `c` (clean up) or the `m` menu (mark ready, back to
+draft, fix CI, update, arm or disarm auto-merge, relaunch) act on all of them; `D`, `M` and `T` toggle stop-at-draft, auto-merge
 and auto-tidy. To tidy merged sessions without the TUI:
 
 ```bash

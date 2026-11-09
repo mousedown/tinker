@@ -100,14 +100,16 @@ tinker tidy [--all] [--dry-run]
 
 Tick sessions, then act on all of them at once. With nothing ticked, a command acts on the
 highlighted row. Each command asks y/n once, names what it skips and why, then resumes each worker in
-the background with `claude --bg --resume`, so it keeps its context.
+the background with `claude --bg --resume`, so it keeps its context. The row shows a spinner and what
+it is doing until the new session starts or the action finishes, and the resumed session takes the
+old one's place in the list (`f` shows every session).
 
 | Key | Does |
 |---|---|
 | `space` / `*` / `t` / `u` | Tick a row / its whole group / everything to tidy / clear ticks |
 | `p` | **Prepare** the ticked PRs with `/tinker:prepare`: merge the base in, run checks, push, review at the final head, rewrite the description, mark ready |
 | `c` | **Clean up**: `claude rm` the session and its worktree, and delete the local branch if the PR merged |
-| `:` | Command line: `prepare`, `fix-ci`, `update`, `cleanup`, `relaunch`, `automerge on\|off`, `tidy`, `help` |
+| `m` | **Menu** of everything below for the ticked rows: prepare, mark ready, back to draft, fix CI, update, arm or disarm auto-merge, clean up, relaunch. ↑↓ and enter, or press the item's letter |
 | `D` / `M` / `T` | Sticky toggles: **stop at draft**, **auto-merge** after prepare, **auto-tidy** merged sessions |
 | `o` / `i` | Open the PR / the failing check (both are also ctrl/cmd-clickable in the table) |
 | `enter`, `a` | Open the detail view (worker output rendered as markdown) / attach |

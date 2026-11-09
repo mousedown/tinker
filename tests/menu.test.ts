@@ -3,7 +3,7 @@ import { checksUrlOf, countChecks } from '../tui/data';
 import { inline, markdown } from '../tui/markdown';
 import { stripAnsi } from '../tui/render/text';
 import { DEFAULTS } from '../tui/settings';
-import { STALE_MS, initialState, preparePrompt, reduce, relaunchArgs, tidyOf, type State } from '../tui/state';
+import { STALE_MS, initialState, preparePrompt, reduce, relaunchArgs, tidyOf, visible, type State } from '../tui/state';
 import { ciBar, screen } from '../tui/view';
 import { NOW, ROWS, pr, row } from './fixtures';
 
@@ -33,17 +33,18 @@ describe('tidy', () => {
     expect(asked.state.confirm?.text).toContain('Clean up');
     const done = reduce(asked.state, key('y'));
     expect(done.effects).toEqual([
-      { type: 'cleanup', id: 'm1', cwd: '/repo', label: 'ABC-200', branch: 'fix/ABC-200' },
-      { type: 'cleanup', id: 'c1', cwd: '/repo', label: 'ABC-201', branch: null },
-      { type: 'cleanup', id: 's1', cwd: '/repo', label: 'ABC-202', branch: null },
+      { type: 'cleanup', id: 'm1', ids: ['m1'], cwd: '/repo', label: 'ABC-200', branch: 'fix/ABC-200' },
+      { type: 'cleanup', id: 'c1', ids: ['c1'], cwd: '/repo', label: 'ABC-201', branch: null },
+      { type: 'cleanup', id: 's1', ids: ['s1'], cwd: '/repo', label: 'ABC-202', branch: null },
     ].sort((a, b) => s.marks.indexOf(a.id) - s.marks.indexOf(b.id)));
+    expect(Object.keys(done.state.pending).sort()).toEqual(['ABC-200', 'ABC-201', 'ABC-202']);
     expect(done.state.marks).toEqual([]);
   });
 
   test('auto-tidy cleans merged sessions once, and leaves closed and stale ones for you', () => {
     const on = { ...DEFAULTS, autoTidy: true };
     const first = reduce(initialState(140, 40, on), { type: 'rows', rows: [merged, closed, stale], now: NOW });
-    expect(first.effects).toEqual([{ type: 'cleanup', id: 'm1', cwd: '/repo', label: 'ABC-200', branch: 'fix/ABC-200' }]);
+    expect(first.effects).toEqual([{ type: 'cleanup', id: 'm1', ids: ['m1'], cwd: '/repo', label: 'ABC-200', branch: 'fix/ABC-200' }]);
     const again = reduce(first.state, { type: 'rows', rows: [merged, closed, stale], now: NOW });
     expect(again.effects).toEqual([]);
     expect(reduce(initialState(140, 40), { type: 'rows', rows: [merged], now: NOW }).effects).toEqual([]);
@@ -90,22 +91,46 @@ describe('menu', () => {
     expect(press(loaded(), 'M', 'T').settings).toEqual({ draft: false, autoMerge: true, autoTidy: true });
   });
 
-  test('the : line runs commands: fix-ci needs a red PR, automerge needs on or off', () => {
-    const run = (s: State, line: string) => {
-      let st = press(s, ':', ...line.split(''));
-      return reduce(st, { type: 'key', key: { name: 'enter' } });
-    };
+  test('m opens the menu; a letter or enter runs an item on the ticked rows', () => {
     const base = { ...loaded(), marks: ['d1', 'f1'] };
-    const fix = run(base, 'fix-ci');
+    const open = reduce(base, key('m')).state;
+    expect(open.menu).toBe(0);
+    const fix = reduce(open, key('f'));
+    expect(fix.state.menu).toBeNull();
     expect(fix.state.confirm?.text).toContain('Fix CI on ABC-105?');
     expect(fix.state.confirm?.text).toContain('ABC-103 CI pass');
-    expect(run(base, 'automerge').state.message?.tone).toBe('error');
-    const arm = reduce(run(base, 'automerge on').state, key('y'));
-    expect(arm.effects).toEqual([
-      { type: 'automerge', cwd: '/repo', number: 2571, on: true },
-      { type: 'automerge', cwd: '/repo', number: 2580, on: true },
+    const down = reduce(open, { type: 'key', key: { name: 'down' } }).state;
+    const ready = reduce(down, { type: 'key', key: { name: 'enter' } });
+    expect(ready.state.confirm?.text).toContain('Mark ready ABC-103, ABC-105?');
+    expect(reduce(ready.state, key('y')).effects).toEqual([
+      { type: 'ready', cwd: '/repo', label: 'ABC-103', number: 2571, undo: false },
+      { type: 'ready', cwd: '/repo', label: 'ABC-105', number: 2580, undo: false },
     ]);
-    expect(run(base, 'nope').state.message?.text).toContain('Unknown command');
+    const arm = reduce(reduce(open, key('a')).state, key('y'));
+    expect(arm.effects).toEqual([
+      { type: 'automerge', cwd: '/repo', label: 'ABC-103', number: 2571, on: true },
+      { type: 'automerge', cwd: '/repo', label: 'ABC-105', number: 2580, on: true },
+    ]);
+    expect(reduce(open, { type: 'key', key: { name: 'esc' } }).state.menu).toBeNull();
+  });
+
+  test('back to draft refuses a PR that is already a draft', () => {
+    const s = { ...loaded(), selId: 'd1' };
+    const step = reduce(reduce(s, key('m')).state, key('d'));
+    expect(step.state.message?.text).toContain('already a draft');
+  });
+
+  test('a resumed session replaces its old row, keeps the cursor, and shows progress until it is working', () => {
+    const old = ROWS.find((r) => r.id === 'd1')!;
+    let s = { ...loaded(), selId: 'd1' };
+    s = reduce(reduce(s, key('p')).state, key('y')).state;
+    expect(s.pending['ABC-103']).toMatchObject({ verb: 'preparing', waitFor: 'session' });
+    expect(stripAnsi(screen(s).join('\n'))).toContain('preparing…');
+    const fresh = row({ ...old, id: 'd2', sessionId: 'd2-x', state: 'working', startedAt: NOW + 1000 });
+    s = reduce(s, { type: 'rows', rows: [...ROWS, fresh], now: NOW + 2000 }).state;
+    expect(s.selId).toBe('d2');
+    expect(s.pending['ABC-103']).toBeUndefined();
+    expect(visible(s).filter((r) => r.key === 'ABC-103').map((r) => r.id)).toEqual(['d2']);
   });
 
   test('relaunch works from a key or a GitHub issue, not a description', () => {

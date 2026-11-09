@@ -1,6 +1,6 @@
 import { closeSync, existsSync, fstatSync, openSync, readSync, readdirSync } from 'fs';
 import { homedir } from 'os';
-import { join } from 'path';
+import { dirname, join } from 'path';
 
 export const TAG = '🐙';
 
@@ -72,6 +72,18 @@ export async function sessions(all: boolean): Promise<Session[]> {
   }
 }
 
+const roots = new Map<string, string>();
+
+export async function repoRoot(cwd: string): Promise<string> {
+  const hit = roots.get(cwd);
+  if (hit) return hit;
+  if (!existsSync(cwd)) return cwd;
+  const out = (await run(['git', 'rev-parse', '--path-format=absolute', '--git-common-dir'], cwd)).trim();
+  const root = out ? dirname(out) : cwd;
+  roots.set(cwd, root);
+  return root;
+}
+
 export function issueKey(name: string): string | null {
   return /\b([A-Z][A-Z0-9]+-\d+)\b/.exec(name)?.[1] ?? null;
 }
@@ -128,8 +140,8 @@ function ciOf(checks: GhPr['statusCheckRollup']): Ci {
   return 'pending';
 }
 
-export async function pulls(cwd: string): Promise<Pr[]> {
-  if (!existsSync(cwd)) return [];
+export async function pulls(cwd: string): Promise<Pr[] | null> {
+  if (!existsSync(cwd)) return null;
   const out = await run(
     ['gh', 'pr', 'list', '--state', 'all', '--author', '@me', '--limit', '60', '--json',
       'number,title,headRefName,baseRefName,url,state,isDraft,autoMergeRequest,statusCheckRollup'],
@@ -150,7 +162,7 @@ export async function pulls(cwd: string): Promise<Pr[]> {
       base: p.baseRefName,
     }));
   } catch {
-    return [];
+    return null;
   }
 }
 
