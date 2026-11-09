@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { existsSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import {
@@ -12,12 +13,14 @@ import {
   type Pr,
   type Row,
 } from './data';
+import { machineSampler } from './machine';
 import { decode } from './runtime/keys';
 import { openUrl, restoreOnExit, terminal } from './runtime/tty';
 import { diffFrame } from './runtime/writer';
 import { stripAnsi } from './render/text';
 import { useColor } from './render/theme';
-import { initialState, reduce, type Effect, type Msg, type State } from './state';
+import { loadSettings, saveSettings } from './settings';
+import { COMMANDS, initialState, reduce, tidyOf, type Effect, type Msg, type State } from './state';
 import { plainTable, screen } from './view';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -54,19 +57,96 @@ function splitArgs(line: string): string[] {
   return out;
 }
 
-async function capture(cmd: string[]): Promise<{ ok: boolean; out: string }> {
-  const proc = Bun.spawn(cmd, { stdout: 'pipe', stderr: 'pipe', env: withoutClaudeCode() });
+async function capture(cmd: string[], cwd?: string): Promise<{ ok: boolean; out: string }> {
+  if (cwd && !existsSync(cwd)) return { ok: false, out: `${cwd} no longer exists` };
+  const proc = Bun.spawn(cmd, { cwd, stdout: 'pipe', stderr: 'pipe', env: withoutClaudeCode() });
   const [out, err] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text()]);
   const code = await proc.exited;
   return { ok: code === 0, out: (out + err).trim() };
 }
 
+const mergeFlags = new Map<string, string>();
+
+async function mergeFlag(cwd: string): Promise<string> {
+  const hit = mergeFlags.get(cwd);
+  if (hit) return hit;
+  const r = await capture(['gh', 'repo', 'view', '--json', 'squashMergeAllowed,mergeCommitAllowed,rebaseMergeAllowed'], cwd);
+  let flag = '--squash';
+  try {
+    const repo = JSON.parse(r.out) as { squashMergeAllowed: boolean; mergeCommitAllowed: boolean; rebaseMergeAllowed: boolean };
+    flag = repo.squashMergeAllowed ? '--squash' : repo.mergeCommitAllowed ? '--merge' : repo.rebaseMergeAllowed ? '--rebase' : '--squash';
+  } catch {
+    flag = '--squash';
+  }
+  mergeFlags.set(cwd, flag);
+  return flag;
+}
+
+function firstLine(text: string): string {
+  return text.split('\n').find((l) => l.trim())?.trim() ?? '';
+}
+
+export async function perform(effect: Extract<Effect, { type: 'resume' | 'cleanup' | 'automerge' }>): Promise<{ ok: boolean; text: string }> {
+  switch (effect.type) {
+    case 'resume': {
+      const r = await capture(['claude', '--bg', '--resume', effect.sessionId, '-n', effect.name, effect.prompt], effect.cwd);
+      return { ok: r.ok, text: r.ok ? `${effect.label}: resumed in the background.` : `${effect.label}: ${firstLine(r.out) || 'resume failed'}` };
+    }
+    case 'cleanup': {
+      const common = await capture(['git', 'rev-parse', '--path-format=absolute', '--git-common-dir'], effect.cwd);
+      const main = common.ok ? dirname(common.out.trim()) : null;
+      const r = await capture(['claude', 'rm', effect.id]);
+      if (!r.ok) return { ok: false, text: `${effect.label}: ${firstLine(r.out) || 'claude rm failed'}` };
+      if (effect.branch && main) {
+        const has = await capture(['git', 'show-ref', '--verify', '--quiet', `refs/heads/${effect.branch}`], main);
+        const out = await capture(['git', 'worktree', 'list', '--porcelain'], main);
+        const checkedOut = out.out.includes(`branch refs/heads/${effect.branch}\n`);
+        if (has.ok && !checkedOut) await capture(['git', 'branch', '-D', effect.branch], main);
+      }
+      return { ok: true, text: `${effect.label}: tidied${effect.branch ? ` (session, worktree and ${effect.branch})` : ' (session and worktree)'}.` };
+    }
+    case 'automerge': {
+      const args = effect.on ? ['gh', 'pr', 'merge', String(effect.number), '--auto', await mergeFlag(effect.cwd)] : ['gh', 'pr', 'merge', String(effect.number), '--disable-auto'];
+      const r = await capture(args, effect.cwd);
+      return { ok: r.ok, text: r.ok ? `#${effect.number}: auto-merge ${effect.on ? 'armed' : 'disarmed'}.` : `#${effect.number}: ${firstLine(r.out) || 'gh pr merge failed'}` };
+    }
+  }
+}
+
+async function tidy(args: string[]): Promise<void> {
+  const all = args.includes('--all');
+  const dry = args.includes('--dry-run');
+  const rows = await loadRows(true);
+  const now = Date.now();
+  const picked = rows.filter((r) => {
+    const t = tidyOf(r, now);
+    return t === 'merged' || (all && t !== null);
+  });
+  if (picked.length === 0) {
+    process.stdout.write(all ? 'Nothing to tidy.\n' : 'No merged sessions to tidy. --all also takes closed and stale ones.\n');
+    return;
+  }
+  const state = { ...initialState(120, 40), rows, now };
+  for (const r of picked) {
+    const plan = COMMANDS.cleanup.plan(r, state);
+    if (!plan.ok || plan.effect.type !== 'cleanup') continue;
+    const what = `${r.key ?? r.label}\t${tidyOf(r, now)}\t${r.id}`;
+    if (dry) {
+      process.stdout.write(`${what}\tdry-run\n`);
+      continue;
+    }
+    const out = await perform(plan.effect);
+    process.stdout.write(`${what}\t${out.ok ? 'tidied' : 'kept'}\t${out.text}\n`);
+  }
+}
+
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
   if (args.includes('--help') || args.includes('-h')) {
-    process.stdout.write('Usage: tinker tui [--plain]\n\nA live view of Tinker’s background sessions.\n');
+    process.stdout.write('Usage: tinker tui [--plain]\n       tinker tidy [--all] [--dry-run]\n\nA live view of Tinker’s background sessions.\n');
     return;
   }
+  if (args[0] === '--tidy') return tidy(args.slice(1));
 
   const width = () => process.stdout.columns || 100;
   const height = () => process.stdout.rows || 30;
@@ -79,7 +159,8 @@ async function main(): Promise<void> {
   }
 
   const term = terminal(process.stdin, process.stdout);
-  let state: State = initialState(width(), height());
+  let state: State = initialState(width(), height(), loadSettings());
+  const sample = machineSampler();
   let prev: string[] | null = null;
   let busy = false;
   let paused = false;
@@ -137,6 +218,21 @@ async function main(): Promise<void> {
         await refresh();
         return;
       }
+      case 'settings':
+        try {
+          saveSettings(effect.settings);
+        } catch (error) {
+          dispatch({ type: 'message', text: `Could not save settings: ${String(error)}`, tone: 'error' });
+        }
+        return;
+      case 'resume':
+      case 'cleanup':
+      case 'automerge': {
+        const r = await perform(effect);
+        dispatch({ type: 'message', text: r.text, tone: r.ok ? 'info' : 'error' });
+        await refresh(true);
+        return;
+      }
       case 'launch': {
         const r = await capture([LAUNCHER, ...splitArgs(effect.args)]);
         const lines = r.out.split('\n').filter(Boolean).map((l) => l.split('\t').slice(0, 2).join(' '));
@@ -147,7 +243,7 @@ async function main(): Promise<void> {
       case 'attach': {
         paused = true;
         term.leave();
-        process.stdout.write(`\x1b[2J\x1b[H\x1b[2mAttaching to ${effect.id}. Ctrl+Z or ← to come back to Tinker.\x1b[0m\n`);
+        process.stdout.write(`\x1b[2J\x1b[H\x1b[2mAttaching to ${effect.id}. Ctrl+Z comes back to Tinker. ← opens Claude's agent view instead; Esc there also comes back.\x1b[0m\n`);
         const proc = Bun.spawn(['claude', 'attach', effect.id], { stdin: 'inherit', stdout: 'inherit', stderr: 'inherit', env: withoutClaudeCode() });
         await proc.exited;
         term.enter();
@@ -177,7 +273,18 @@ async function main(): Promise<void> {
   process.stdout.on('resize', onResize);
   draw();
   void refresh();
-  const timer = setInterval(() => void refresh(), POLL_MS);
+  const measure = async () => {
+    try {
+      dispatch({ type: 'machine', machine: await sample() });
+    } catch {
+      return;
+    }
+  };
+  void measure();
+  const timer = setInterval(() => {
+    void refresh();
+    void measure();
+  }, POLL_MS);
 
   await finished;
   release();

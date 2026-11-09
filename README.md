@@ -93,7 +93,32 @@ To get the `tinker` command in your shell too, link the launcher onto your `PATH
 tinker <issue>... [--note "text"] [--repo PATH] [--dry-run]
 tinker status [--all]
 tinker tui [--plain]
+tinker tidy [--all] [--dry-run]
 ```
+
+### In the TUI
+
+Tick sessions, then act on all of them at once. With nothing ticked, a command acts on the
+highlighted row. Each command asks y/n once, names what it skips and why, then resumes each worker in
+the background with `claude --bg --resume`, so it keeps its context.
+
+| Key | Does |
+|---|---|
+| `space` / `*` / `t` / `u` | Tick a row / its whole group / everything to tidy / clear ticks |
+| `p` | **Prepare** the ticked PRs with `/tinker:prepare`: merge the base in, run checks, push, review at the final head, rewrite the description, mark ready |
+| `c` | **Clean up**: `claude rm` the session and its worktree, and delete the local branch if the PR merged |
+| `:` | Command line: `prepare`, `fix-ci`, `update`, `cleanup`, `relaunch`, `automerge on\|off`, `tidy`, `help` |
+| `D` / `M` / `T` | Sticky toggles: **stop at draft**, **auto-merge** after prepare, **auto-tidy** merged sessions |
+| `o` / `i` | Open the PR / the failing check (both are also ctrl/cmd-clickable in the table) |
+| `enter`, `a` | Open the detail view (worker output rendered as markdown) / attach |
+
+Rows whose PR merged or closed, or that ended over a week ago without a PR, show `⌫` and are counted in
+the header. With auto-tidy on, merged ones are cleaned as soon as they appear; `tinker tidy` does the
+same from a cron job or hook, and `--all` adds the closed and stale ones. `claude rm` refuses anything
+with unpushed work. The toggles live in `~/.config/tinker/settings.json` (or `TINKER_SETTINGS`).
+
+When you attach from the TUI, Ctrl+Z comes back to it. ← opens Claude's agent view instead, and Esc
+there also comes back.
 
 | Variable | Effect |
 |---|---|
@@ -101,6 +126,7 @@ tinker tui [--plain]
 | `TINKER_KEY_PREFIX` | Makes a bare number mean `<PREFIX>-<n>` instead of a GitHub issue |
 | `TINKER_REVIEW` | Self-review command, e.g. `/my-review --fix` (default: Claude Code's built-in `/code-review --fix`, or whatever the repo's CLAUDE.md names) |
 | `TINKER_AGENT` | Worker agent (default `tinker:tinker`) |
+| `TINKER_LINKS=0` | Turns off clickable PR and CI links for a terminal that prints them raw |
 
 Requires `claude`, `gh`, `jq`, and `bun` for the TUI.
 

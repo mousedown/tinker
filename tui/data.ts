@@ -17,6 +17,12 @@ export interface Session {
 
 export type Ci = 'pass' | 'fail' | 'pending' | 'none';
 
+export interface Checks {
+  pass: number;
+  fail: number;
+  pending: number;
+}
+
 export interface Pr {
   number: number;
   title: string;
@@ -25,6 +31,10 @@ export interface Pr {
   state: 'OPEN' | 'MERGED' | 'CLOSED';
   draft: boolean;
   ci: Ci;
+  checks: Checks;
+  checksUrl: string;
+  autoMerge: boolean;
+  base: string;
 }
 
 export interface Verdict {
@@ -73,14 +83,48 @@ interface GhPr {
   url: string;
   state: Pr['state'];
   isDraft: boolean;
-  statusCheckRollup: { conclusion?: string; status?: string; state?: string }[] | null;
+  baseRefName: string;
+  autoMergeRequest: unknown;
+  statusCheckRollup: GhCheck[] | null;
+}
+
+interface GhCheck {
+  conclusion?: string;
+  status?: string;
+  state?: string;
+  detailsUrl?: string;
+  targetUrl?: string;
+}
+
+const FAILED = ['FAILURE', 'ERROR', 'CANCELLED', 'TIMED_OUT', 'ACTION_REQUIRED'];
+
+function resultOf(c: GhCheck): string {
+  return (c.conclusion || c.state || c.status || '').toUpperCase();
+}
+
+const PASSED = ['SUCCESS', 'SKIPPED', 'NEUTRAL'];
+
+export function countChecks(checks: GhCheck[] | null): Checks {
+  const out: Checks = { pass: 0, fail: 0, pending: 0 };
+  for (const c of checks ?? []) {
+    const r = resultOf(c);
+    if (FAILED.includes(r)) out.fail++;
+    else if (PASSED.includes(r)) out.pass++;
+    else out.pending++;
+  }
+  return out;
+}
+
+export function checksUrlOf(prUrl: string, checks: GhCheck[] | null): string {
+  const failed = (checks ?? []).find((c) => FAILED.includes(resultOf(c)));
+  return failed?.detailsUrl || failed?.targetUrl || `${prUrl}/checks`;
 }
 
 function ciOf(checks: GhPr['statusCheckRollup']): Ci {
   if (!checks || checks.length === 0) return 'none';
-  const results = checks.map((c) => (c.conclusion || c.state || c.status || '').toUpperCase());
-  if (results.some((r) => ['FAILURE', 'ERROR', 'CANCELLED', 'TIMED_OUT', 'ACTION_REQUIRED'].includes(r))) return 'fail';
-  if (results.every((r) => ['SUCCESS', 'SKIPPED', 'NEUTRAL'].includes(r))) return 'pass';
+  const results = checks.map(resultOf);
+  if (results.some((r) => FAILED.includes(r))) return 'fail';
+  if (results.every((r) => PASSED.includes(r))) return 'pass';
   return 'pending';
 }
 
@@ -88,7 +132,7 @@ export async function pulls(cwd: string): Promise<Pr[]> {
   if (!existsSync(cwd)) return [];
   const out = await run(
     ['gh', 'pr', 'list', '--state', 'all', '--author', '@me', '--limit', '60', '--json',
-      'number,title,headRefName,url,state,isDraft,statusCheckRollup'],
+      'number,title,headRefName,baseRefName,url,state,isDraft,autoMergeRequest,statusCheckRollup'],
     cwd
   );
   try {
@@ -100,6 +144,10 @@ export async function pulls(cwd: string): Promise<Pr[]> {
       state: p.state,
       draft: p.isDraft,
       ci: ciOf(p.statusCheckRollup),
+      checks: countChecks(p.statusCheckRollup),
+      checksUrl: checksUrlOf(p.url, p.statusCheckRollup),
+      autoMerge: Boolean(p.autoMergeRequest),
+      base: p.baseRefName,
     }));
   } catch {
     return [];
