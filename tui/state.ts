@@ -272,17 +272,35 @@ export function updatePrompt(r: Row): string {
   );
 }
 
+export function nudgePrompt(r: Row): string {
+  const where = r.pr ? ` on PR #${r.pr.number} (branch ${r.pr.branch})` : '';
+  return (
+    `Tinker command: nudge. You look stuck${where}. If a command or tool call is hanging, abandon it and try ` +
+    `another way. Say in one line where the work is and what is left, then carry on to the end of the worker ` +
+    `contract: pushed, self-reviewed, CI watched. If you are waiting on something only a person can give, park ` +
+    `and say exactly what you need.${END}`
+  );
+}
+
 export function relaunchArgs(r: Row): string | null {
   if (r.key) return r.key;
   const gh = /^GH-(\d+)$/.exec(r.label);
   return gh ? `#${gh[1]}` : null;
 }
 
-function resume(r: Row, prompt: string): Effect {
-  return { type: 'resume', id: r.id, sessionId: r.sessionId, cwd: r.cwd, name: r.name, label: r.key ?? r.label, prompt, stopFirst: r.state === 'blocked' };
+function resume(r: Row, prompt: string, stopFirst = r.state === 'blocked'): Effect {
+  return { type: 'resume', id: r.id, sessionId: r.sessionId, cwd: r.cwd, name: r.name, label: r.key ?? r.label, prompt, stopFirst };
 }
 
 export const COMMANDS: Record<string, CommandSpec> = {
+  nudge: {
+    verb: 'Nudge',
+    doing: 'nudging',
+    plan: (r) => {
+      const why = r.pr && r.pr.state !== 'OPEN' ? `PR ${r.pr.state.toLowerCase()}` : null;
+      return why ? { ok: false, why } : { ok: true, effect: resume(r, nudgePrompt(r), isLive(r)) };
+    },
+  },
   prepare: {
     verb: 'Prepare',
     doing: 'preparing',
@@ -342,6 +360,14 @@ function automergeSpec(on: boolean): CommandSpec {
       return why ? { ok: false, why } : { ok: true, effect: { type: 'automerge', cwd: r.cwd, label: labelOf(r), number: r.pr!.number, on } };
     },
   };
+}
+
+/** How many of the targets a menu item would act on, and why the first skipped one would be skipped. */
+export function fit(state: State, spec: CommandSpec): { ok: number; of: number; why: string | null } {
+  const rows = targets(state);
+  const plans = rows.map((r) => spec.plan(r, state));
+  const miss = plans.find((p) => !p.ok);
+  return { ok: plans.filter((p) => p.ok).length, of: rows.length, why: miss && !miss.ok ? miss.why : null };
 }
 
 export function apply(state: State, spec: CommandSpec): Step {
@@ -412,6 +438,7 @@ export interface MenuItem {
 }
 
 export const MENU: MenuItem[] = [
+  { key: 'n', label: 'Nudge', hint: 'stuck? stop it if running, then tell it to report and carry on', spec: COMMANDS.nudge },
   { key: 'p', label: 'Prepare', hint: 'merge the base, run checks, review at the head, then mark ready (D keeps it a draft)', spec: COMMANDS.prepare },
   { key: 'r', label: 'Mark ready', hint: 'take the PR out of draft now: gh pr ready', spec: readySpec(false) },
   { key: 'd', label: 'Back to draft', hint: 'gh pr ready --undo', spec: readySpec(true) },

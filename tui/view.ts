@@ -5,7 +5,7 @@ import { crumbs, keyLines, paint, type Hint } from './render/paint';
 import { headerRow, layout, tableRow, type Column } from './render/table';
 import type { Seg } from './render/text';
 import { BOLD, BRASS, DIM, GREEN, INK, INK2, MAGENTA, RED, SKY } from './render/theme';
-import { MENU, isLive, needsYou, newest, pendingOf, phaseOf, selected, targets, tidyOf, visible, type State } from './state';
+import { MENU, fit, isLive, needsYou, newest, pendingOf, phaseOf, selected, targets, tidyOf, visible, type State } from './state';
 import { machineStrip } from './strip';
 
 export function age(ms: number): string {
@@ -177,7 +177,18 @@ function footer(state: State, hints: [Hint[], Hint[]]): Seg[][] {
       [['Act on ', DIM], [what, BOLD]],
       ...MENU.map((item, i): Seg[] => {
         const on = i === state.menu;
-        return [[on ? '› ' : '  ', on ? SKY : null], [item.key, BOLD], ['  ', null], [item.label.padEnd(18), on ? SKY : INK], [item.hint, DIM]];
+        const f = fit(state, item.spec);
+        const none = f.ok === 0;
+        const count = f.of > 1 ? `${f.ok}/${f.of}`.padEnd(6) : '';
+        const note = none ? `— ${f.why}` : f.ok < f.of ? `${item.hint} (skips: ${f.why})` : item.hint;
+        return [
+          [on ? '› ' : '  ', on ? SKY : null],
+          [item.key, none ? DIM : BOLD],
+          ['  ', null],
+          [item.label.padEnd(18), none ? DIM : on ? SKY : INK],
+          [count, DIM],
+          [note, DIM],
+        ];
       }),
       [['↑↓ choose · enter or the letter runs it · esc closes', DIM]],
     ];

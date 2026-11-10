@@ -102,7 +102,8 @@ describe('menu', () => {
     expect(fix.state.message?.text).toContain('Fix CI on ABC-105');
     expect(fix.state.message?.text).toContain('ABC-103 CI pass');
     expect(fix.effects).toHaveLength(1);
-    const down = reduce(open, { type: 'key', key: { name: 'down' } }).state;
+    const downKey = { type: 'key' as const, key: { name: 'down' as const } };
+    const down = reduce(reduce(open, downKey).state, downKey).state;
     const ready = reduce(down, { type: 'key', key: { name: 'enter' } });
     expect(ready.state.message?.text).toContain('Mark ready ABC-103, ABC-105');
     expect(ready.effects).toEqual([
@@ -115,6 +116,23 @@ describe('menu', () => {
       { type: 'automerge', cwd: '/repo', label: 'ABC-105', number: 2580, on: true },
     ]);
     expect(reduce(open, { type: 'key', key: { name: 'esc' } }).state.menu).toBeNull();
+  });
+
+  test('nudge stops a running session before resuming it, and works on finished ones too', () => {
+    const s = { ...loaded(), marks: ['w1', 'd1', 'm1'], rows: [...loaded().rows, merged] };
+    const step = reduce(reduce(s, key('m')).state, key('n'));
+    expect(step.state.message?.text).toContain('Nudge ABC-101, ABC-103 (1 skipped: ABC-200 PR merged)');
+    expect(step.effects).toHaveLength(2);
+    expect(step.effects[0]).toMatchObject({ type: 'resume', id: 'w1', stopFirst: true });
+    expect(step.effects[1]).toMatchObject({ type: 'resume', id: 'd1', stopFirst: false });
+    expect((step.effects[1] as { prompt: string }).prompt).toStartWith('Tinker command: nudge. You look stuck on PR #2571');
+  });
+
+  test('the menu says how many ticked rows each item fits, and why it skips the rest', () => {
+    const s = reduce({ ...loaded(), marks: ['w1', 'd1'] }, key('m')).state;
+    const text = stripAnsi(screen(s).join('\n'));
+    expect(text).toMatch(/Nudge\s+2\/2/);
+    expect(text).toMatch(/Prepare\s+1\/2.*skips: still working/);
   });
 
   test('back to draft refuses a PR that is already a draft', () => {
