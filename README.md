@@ -162,6 +162,7 @@ tinker <issue>... [--note "text"] [--repo PATH] [--dry-run]
 tinker status [--all]
 tinker tui [--plain]
 tinker tidy [--all] [--dry-run]
+tinker --version
 ```
 
 ### In the TUI
