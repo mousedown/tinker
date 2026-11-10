@@ -13,6 +13,8 @@ export interface Session {
   state: SessionState;
   startedAt: number;
   name: string;
+  /** The session's process while it is running. */
+  pid?: number | null;
 }
 
 export type Ci = 'pass' | 'fail' | 'pending' | 'none';

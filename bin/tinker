@@ -7,14 +7,18 @@ ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
 AGENT="${TINKER_AGENT:-tinker:tinker}"
 REVIEW="${TINKER_REVIEW:-}"
 TAG="🐙"
+MAX_SESSIONS="${TINKER_MAX_SESSIONS:-0}"
+UPDATE_URL="${TINKER_UPDATE_URL:-https://raw.githubusercontent.com/mousedown/tinker/main/package.json}"
+CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/tinker"
 
 usage() {
   cat <<'EOF'
 Usage:
-  tinker <issue>... [--note "text"] [--repo PATH] [--dry-run]
+  tinker <issue>... [--note "text"] [--repo PATH] [--dry-run] [--force]
   tinker status [--all]
   tinker tui [--plain]
   tinker tidy [--all] [--dry-run]
+  tinker update
   tinker --version
 
 An issue is a tracker key (ABC-123), a GitHub issue number or URL (42, #42, https://…/issues/42),
@@ -24,6 +28,15 @@ claude --bg --agent tinker:tinker.
 
 tidy removes the sessions, worktrees and local branches of merged PRs; --all also takes closed PRs and
 sessions over a week old with no PR. claude rm refuses anything with unpushed work.
+
+Launches stop when the machine runs out of room. Each session is budgeted the most memory any session
+used this week (its process and everything it started, 1-8 GB; 2 GB until there's a reading), working
+sessions keep room to grow to that, and 10% stays free. TINKER_SESSION_MB fixes the budget (0 turns the
+check off) and TINKER_MAX_SESSIONS caps how many run at once. Issues that don't fit are held, not
+launched; --force launches them anyway.
+
+On launch, tinker checks once a day for a newer release and offers to update (TINKER_NO_UPDATE_CHECK=1
+turns that off). tinker update updates now.
 
 Self-review defaults to Claude Code's /code-review --fix; set TINKER_REVIEW (e.g. "/my-review --fix")
 to use another review command.
@@ -60,13 +73,149 @@ status() {
     done
 }
 
+pkg_version() { sed -nE 's/.*"version":[[:space:]]*"([^"]+)".*/\1/p' | head -1; }
+VERSION="$(pkg_version <"$ROOT/package.json")"
+
+# True when $1 is a newer x.y.z than $2.
+newer() {
+  local IFS=. i a b
+  read -ra a <<<"${1%%[-+]*}"; read -ra b <<<"${2%%[-+]*}"
+  for i in 0 1 2; do
+    [ "${a[i]:-0}" -gt "${b[i]:-0}" ] 2>/dev/null && return 0
+    [ "${a[i]:-0}" -lt "${b[i]:-0}" ] 2>/dev/null && return 1
+  done
+  return 1
+}
+
+# The latest released version, fetched at most once a day; empty when offline.
+latest_version() {
+  local f="$CACHE_DIR/latest" v
+  if [ -n "$(find "$f" -mmin -1440 2>/dev/null)" ]; then cat "$f"; return; fi
+  v=$(curl -fsSL --max-time 3 "$UPDATE_URL" 2>/dev/null | pkg_version || true)
+  mkdir -p "$CACHE_DIR" 2>/dev/null || true
+  [ -n "$v" ] && { printf '%s\n' "$v" >"$f" 2>/dev/null || true; }
+  printf '%s\n' "$v"
+}
+
+update() {
+  echo "Updating Little Tinker…"
+  claude plugin marketplace update tinker && claude plugin update tinker@tinker || {
+    echo "Update failed. Re-run the installer: curl -fsSL https://raw.githubusercontent.com/mousedown/tinker/main/install.sh | bash" >&2
+    return 1
+  }
+  rm -f "$CACHE_DIR/latest" "$CACHE_DIR/declined"
+  echo "Updated to $(pkg_version <"$ROOT/package.json"). Restart Claude Code (or run /reload-plugins) to load the new worker."
+}
+
+# Offers an update when a newer release is out. Only asks at a terminal, and only once per version.
+check_update() {
+  [ "${TINKER_NO_UPDATE_CHECK:-}" = 1 ] && return 0
+  [ -t 0 ] && [ -t 1 ] || return 0
+  command -v curl >/dev/null || return 0
+  local latest answer
+  latest=$(latest_version)
+  [ -n "$latest" ] && newer "$latest" "$VERSION" || return 0
+  [ "$(cat "$CACHE_DIR/declined" 2>/dev/null)" = "$latest" ] && return 0
+  printf 'Little Tinker %s is out (you have %s). Update now? [y/N] ' "$latest" "$VERSION"
+  read -r answer || answer=""
+  if [[ "$answer" =~ ^[Yy] ]]; then
+    update && exec env TINKER_NO_UPDATE_CHECK=1 "$ROOT/bin/tinker" "$@"
+  else
+    printf '%s\n' "$latest" >"$CACHE_DIR/declined" 2>/dev/null || true
+    echo "Skipping $latest. Run 'tinker update' whenever you're ready."
+  fi
+}
+
+# Total and available memory in MB, as "total available". Available counts what macOS hands back
+# without swapping (free + inactive + speculative), as the TUI's machine strip does.
+memory() {
+  if [ -n "${TINKER_MEM_MB:-}" ]; then echo "$TINKER_MEM_MB"; return; fi
+  if [ -r /proc/meminfo ]; then
+    awk '/^MemTotal:/ {t=$2} /^MemAvailable:/ {a=$2} END {print int(t/1024), int(a/1024)}' /proc/meminfo
+  elif command -v vm_stat >/dev/null; then
+    local total
+    total=$(( $(sysctl -n hw.memsize) / 1048576 ))
+    vm_stat | awk -v t="$total" '
+      /page size of/ { ps = $0; sub(/.*page size of /, "", ps); ps += 0 }
+      /^Pages (free|inactive|speculative):/ { n += $3 }
+      END { a = int(n * ps / 1048576); print t, (a > t ? t : a) }'
+  fi
+}
+
+# What a session costs, from what the running ones use. Raises each live session's peak in
+# $CACHE_DIR/peaks (shared with the TUI, which samples every couple of seconds and so catches builds),
+# drops peaks over a week old, and prints "per-session-MB held-back-MB": the largest peak (kept within
+# 1-8 GB, 2 GB with none, or TINKER_SESSION_MB), and what working sessions may still grow by to reach it.
+# $1: the live sessions, as `claude agents --json` lists them.
+footprint() {
+  local f="$CACHE_DIR/peaks" tmp
+  mkdir -p "$CACHE_DIR" 2>/dev/null || true
+  tmp="$f.$$"
+  {
+    echo "#peaks"; cat "$f" 2>/dev/null || true
+    echo; echo "#ps"; if [ -n "${TINKER_PS:-}" ]; then cat "$TINKER_PS"; else ps -A -o pid=,ppid=,rss=; fi
+    echo; echo "#live"; jq -r '.[] | "\(.id) \(.pid // 0) \(.state)"' <<<"$1"
+  } | awk -v now="$(date +%s)" -v win=604800 -v floor=1024 -v ceil=8192 -v def=2048 \
+        -v fixed="${TINKER_SESSION_MB:-}" -v out="$tmp" '
+    function tree(p,   t, list, cnt, i) {
+      t = rss[p]; cnt = split(kids[p], list, " ")
+      for (i = 1; i <= cnt; i++) if (list[i] != p) t += tree(list[i])
+      return t
+    }
+    /^#/ { sec = $1; next }
+    sec == "#peaks" { if (NF == 3 && now - $2 <= win) { at[$1] = $2; mb[$1] = $3 } next }
+    NF < 3 { next }
+    sec == "#ps" { rss[$1] = $3; if ($1 != $2) kids[$2] = kids[$2] " " $1; next }
+    sec == "#live" { n++; id[n] = $1; pid[n] = $2; st[n] = $3 }
+    END {
+      for (i = 1; i <= n; i++) if (pid[i] > 0 && (pid[i] in rss)) {
+        use[i] = tree(pid[i]) / 1024
+        if (!(id[i] in mb) || use[i] > mb[id[i]]) mb[id[i]] = int(use[i] + 0.5)
+        at[id[i]] = now
+      }
+      for (k in mb) { printf "%s %d %d\n", k, at[k], mb[k] > out; if (mb[k] > top) top = mb[k] }
+      if (fixed != "") per = fixed + 0
+      else if (top > 0) per = top < floor ? floor : (top > ceil ? ceil : top)
+      else per = def
+      for (i = 1; i <= n; i++) if (st[i] == "working" && (i in use) && use[i] < per) held += per - use[i]
+      printf "%d %d\n", per, held
+    }'
+  mv -f "$tmp" "$f" 2>/dev/null || rm -f "$tmp"
+}
+
+# Sets ROOM to how many more sessions fit, by memory and by TINKER_MAX_SESSIONS (-1: no limit),
+# and MEM_NOTE to the figures behind it. $1: the live sessions, as JSON.
+room() {
+  local count total avail per held by_mem=-1 by_cap=-1
+  count=$(jq length <<<"$1")
+  if [ "${TINKER_SESSION_MB:-}" != 0 ]; then
+    read -r total avail <<<"$(memory)"
+    if [ -n "${avail:-}" ]; then
+      read -r per held <<<"$(footprint "$1")"
+      by_mem=$(( (avail - total / 10 - held) / per ))
+      [ "$by_mem" -lt 0 ] && by_mem=0
+      MEM_NOTE="$avail MB free, ~$per MB per session"
+      [ "$held" -gt 0 ] && MEM_NOTE+=", $held MB kept for running ones to grow"
+    fi
+  fi
+  if [ "$MAX_SESSIONS" -gt 0 ] 2>/dev/null; then
+    by_cap=$(( MAX_SESSIONS - count ))
+    [ "$by_cap" -lt 0 ] && by_cap=0
+  fi
+  if [ "$by_mem" -lt 0 ]; then ROOM=$by_cap
+  elif [ "$by_cap" -lt 0 ] || [ "$by_mem" -lt "$by_cap" ]; then ROOM=$by_mem
+  else ROOM=$by_cap
+  fi
+}
+
 launch() {
-  local note="" dry=0 issues=()
+  local note="" dry=0 force=0 issues=()
   while [ $# -gt 0 ]; do
     case "$1" in
       --note) note="$2"; shift 2 ;;
       --repo) REPO="$2"; shift 2 ;;
       --dry-run) dry=1; shift ;;
+      --force) force=1; shift ;;
       -h|--help) usage; exit 0 ;;
       -*) echo "Unknown option: $1" >&2; usage >&2; exit 1 ;;
       *) issues+=("$1"); shift ;;
@@ -75,8 +224,20 @@ launch() {
   [ ${#issues[@]} -gt 0 ] || { usage; exit 1; }
   [ -d "$REPO" ] || { echo "No repo at $REPO" >&2; exit 1; }
 
-  local live seen=" "
-  live=$(sessions | jq -r '.[] | select(.state != "done") | .name')
+  local running live seen=" "
+  running=$(sessions | jq -c '[.[] | select(.state != "done")]')
+  live=$(jq -r '.[].name' <<<"$running")
+
+  local left=-1 why=""
+  MEM_NOTE=""
+  if [ "$force" -eq 0 ]; then
+    room "$running"
+    left=$ROOM
+    if [ -n "$MEM_NOTE" ] && [ "$MAX_SESSIONS" -gt 0 ] 2>/dev/null; then why="no room left ($MEM_NOTE; at most $MAX_SESSIONS at once)"
+    elif [ -n "$MEM_NOTE" ]; then why="no room left ($MEM_NOTE)"
+    else why="no room left (at most $MAX_SESSIONS at once)"
+    fi
+  fi
 
   for raw in "${issues[@]}"; do
     issue="$raw"
@@ -107,6 +268,11 @@ launch() {
       printf '%s\tskipped\ta live Little Tinker session already has it\n' "$label"; continue
     fi
 
+    if [ "$left" -eq 0 ]; then
+      printf '%s\theld\t%s; run it again later or pass --force\n' "$label" "$why"; continue
+    fi
+    [ "$left" -gt 0 ] && left=$((left - 1))
+
     name="$TAG $label"
     if [ "$dry" -eq 1 ]; then
       printf '%s\tdry-run\tcd "%s" && claude --bg --agent %s -n "%s" "%s"\n' "$label" "$REPO" "$AGENT" "$name" "$prompt"
@@ -122,14 +288,15 @@ launch() {
 }
 
 version() {
-  printf 'tinker %s\n' "$(sed -nE 's/^[[:space:]]*"version":[[:space:]]*"([^"]+)".*/\1/p' "$ROOT/package.json" | head -1)"
+  printf 'tinker %s\n' "$VERSION"
 }
 
 case "${1:-}" in
   ""|-h|--help) usage ;;
   -v|--version) version ;;
-  status) shift; status "$@" ;;
-  tui) shift; exec bun "$ROOT/tui/main.ts" "$@" ;;
+  update) update ;;
+  status) check_update "$@"; shift; status "$@" ;;
+  tui) check_update "$@"; shift; exec bun "$ROOT/tui/main.ts" "$@" ;;
   tidy) shift; exec bun "$ROOT/tui/main.ts" --tidy "$@" ;;
-  *) launch "$@" ;;
+  *) check_update "$@"; launch "$@" ;;
 esac

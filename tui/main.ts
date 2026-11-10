@@ -22,6 +22,7 @@ import { stripAnsi } from './render/text';
 import { useColor } from './render/theme';
 import { loadSettings, saveSettings } from './settings';
 import { COMMANDS, initialState, reduce, tidyOf, type Effect, type Msg, type State } from './state';
+import { availableUpdate } from './version';
 import { plainTable, screen } from './view';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -169,7 +170,7 @@ async function main(): Promise<void> {
   }
 
   const term = terminal(process.stdin, process.stdout);
-  let state: State = initialState(width(), height(), loadSettings());
+  let state: State = { ...initialState(width(), height(), loadSettings()), update: availableUpdate() };
   const sample = machineSampler();
   let prev: string[] | null = null;
   let busy = false;
@@ -288,7 +289,7 @@ async function main(): Promise<void> {
   void refresh();
   const measure = async () => {
     try {
-      dispatch({ type: 'machine', machine: await sample(), now: Date.now() });
+      dispatch({ type: 'machine', machine: await sample(state.rows.filter((r) => r.state !== 'done')), now: Date.now() });
     } catch {
       return;
     }
