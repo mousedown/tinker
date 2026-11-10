@@ -15,6 +15,7 @@ Usage:
   tinker status [--all]
   tinker tui [--plain]
   tinker tidy [--all] [--dry-run]
+  tinker --version
 
 An issue is a tracker key (ABC-123), a GitHub issue number or URL (42, #42, https://…/issues/42),
 or a quoted description. With TINKER_KEY_PREFIX=ABC set, a bare number means ABC-<n> instead.
@@ -67,6 +68,7 @@ launch() {
       --repo) REPO="$2"; shift 2 ;;
       --dry-run) dry=1; shift ;;
       -h|--help) usage; exit 0 ;;
+      -*) echo "Unknown option: $1" >&2; usage >&2; exit 1 ;;
       *) issues+=("$1"); shift ;;
     esac
   done
@@ -119,8 +121,13 @@ launch() {
   done
 }
 
+version() {
+  printf 'tinker %s\n' "$(sed -nE 's/^[[:space:]]*"version":[[:space:]]*"([^"]+)".*/\1/p' "$ROOT/package.json" | head -1)"
+}
+
 case "${1:-}" in
   ""|-h|--help) usage ;;
+  -v|--version) version ;;
   status) shift; status "$@" ;;
   tui) shift; exec bun "$ROOT/tui/main.ts" "$@" ;;
   tidy) shift; exec bun "$ROOT/tui/main.ts" --tidy "$@" ;;
