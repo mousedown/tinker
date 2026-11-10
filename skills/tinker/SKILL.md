@@ -40,7 +40,8 @@ ${CLAUDE_PLUGIN_ROOT}/bin/tinker status --all    # include finished ones
 
 Restate the table. For a session in `blocked` state, say it is waiting on the user and how to
 attach. A finished worker's verdict is the last line of its session, `TINKER DONE …` or
-`TINKER PARKED <class> …`.
+`TINKER PARKED <class> …`, and its last message opens with `tinker-status: <green | awaiting-approval |
+ci-failing | blocked> <reason>`: say which ones only wait on an approval and which have red CI.
 
 ## Live view
 

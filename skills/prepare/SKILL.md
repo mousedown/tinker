@@ -113,8 +113,9 @@ and run `gh pr merge <n> --auto --<method>`. If the repo has auto-merge disabled
 
 The PR URL and base, what each phase changed or "nothing to do", the review's verdict at the final
 head, whether the PR is ready or a draft, and whether auto-merge is armed. Watch CI with
-`gh pr checks <n> --watch` and name the first failure if there is one. In a Tinker worker, end with
-the contract's `TINKER DONE …` or `TINKER PARKED …` line.
+`gh pr checks <n> --watch` and name the first failure if there is one. In a Tinker worker, treat a red
+check as the contract's CI stage says (a fix moves the head, so review the fix delta again), begin the
+report with its `tinker-status:` line and end with its `TINKER DONE …` or `TINKER PARKED …` line.
 
 ## Guardrails
 

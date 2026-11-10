@@ -5,7 +5,7 @@ import { crumbs, keyLines, paint, type Hint } from './render/paint';
 import { headerRow, layout, tableRow, type Column } from './render/table';
 import type { Seg } from './render/text';
 import { BOLD, BRASS, DIM, GREEN, INK, INK2, MAGENTA, RED, SKY } from './render/theme';
-import { MENU, isLive, needsYou, newest, pendingOf, selected, targets, tidyOf, visible, type State } from './state';
+import { MENU, isLive, needsYou, newest, pendingOf, phaseOf, selected, targets, tidyOf, visible, type State } from './state';
 import { machineStrip } from './strip';
 
 export function age(ms: number): string {
@@ -22,9 +22,13 @@ export function stateCell(r: Row, state: State): Seg[] {
   const pending = pendingOf(state, r);
   if (pending && !(pending.waitFor === 'session' && r.state === 'working'))
     return [[`${SPIN[Math.floor(now / 500) % SPIN.length]} ${pending.verb}…`, SKY]];
+  const phase = phaseOf(r);
+  if (r.state === 'working') return [[`${SPIN[Math.floor(now / 500) % SPIN.length]} ${phase === 'fixing-ci' ? 'fixing CI' : 'working'}`, SKY]];
+  if (phase === 'awaiting-approval') return [['◆ awaiting approval', BRASS]];
+  if (phase === 'ci-failing') return [['✕ CI failing', RED]];
+  if (phase === 'green') return [['✓ green', GREEN]];
   if (r.verdict?.kind === 'PARKED' && !isLive(r)) return [['◆ parked', BRASS]];
   if (r.state === 'blocked') return [['◆ needs you', BRASS]];
-  if (r.state === 'working') return [[`${SPIN[Math.floor(now / 500) % SPIN.length]} working`, SKY]];
   const tidy = tidyOf(r, now);
   if (tidy) return [[`⌫ ${tidy}`, MAGENTA]];
   if (r.state === 'failed') return [['✕ failed', RED]];
@@ -93,13 +97,14 @@ function whatCell(r: Row, state?: State): Seg[] {
       [`${r.verdict.kind} `, r.verdict.kind === 'DONE' ? GREEN : BRASS],
       [r.verdict.text.replace(/https:\/\/github\.com\/[^\s]+\/pull\/(\d+)/g, '#$1'), INK2],
     ];
+  if (r.status?.text && r.state !== 'working') return [[r.status.text, INK2]];
   const last = r.said[r.said.length - 1]?.split('\n').find((l) => l.trim());
   return last ? [[last.trim().replace(/[*`#>]/g, ''), INK2]] : [['', null]];
 }
 
 const COLUMNS: Column[] = [
   { key: 'mark', title: '', width: 1 },
-  { key: 'state', title: 'STATE', width: 12 },
+  { key: 'state', title: 'STATE', width: 19 },
   { key: 'issue', title: 'ISSUE', width: 12 },
   { key: 'pr', title: 'PR', width: 13, drop: 3 },
   { key: 'ci', title: 'CI', width: 10, drop: 1 },
@@ -110,6 +115,7 @@ const COLUMNS: Column[] = [
 function summary(state: State): Seg[] {
   const rows = [...newest(state.rows).values()];
   const need = rows.filter(needsYou).length;
+  const red = rows.filter((r) => phaseOf(r) === 'ci-failing').length;
   const working = rows.filter((r) => r.state === 'working').length;
   const tidy = rows.filter((r) => tidyOf(r, state.now)).length;
   const done = visible(state).filter((r) => r.verdict?.kind === 'DONE' && !tidyOf(r, state.now)).length;
@@ -119,6 +125,7 @@ function summary(state: State): Seg[] {
     parts.push(seg);
   };
   if (need) add([`◆ ${need} need you`, BRASS]);
+  if (red) add([`✕ ${red} CI failing`, RED]);
   if (working) add([`● ${working} working`, SKY]);
   if (done) add([`✓ ${done} done`, GREEN]);
   if (tidy) add([`⌫ ${tidy} to tidy`, MAGENTA]);
@@ -247,6 +254,7 @@ function detailScreen(state: State, r: Row): string[] {
         : [['none yet', DIM]]
     ),
     ...(r.state === 'working' && r.activity ? [field('now', whatCell(r, state))] : []),
+    ...(r.status ? [field('status', [[r.status.kind, INK], ['  ', null], [r.status.text, INK2]])] : []),
     field('verdict', r.verdict && !isLive(r) ? whatCell(r) : [['none yet', DIM]]),
     '',
     paint([['  Latest from the worker', BOLD]], w),
