@@ -155,7 +155,7 @@ describe('CI', () => {
       { conclusion: 'FAILURE', detailsUrl: 'https://ci/fail' },
       { status: 'IN_PROGRESS' },
     ];
-    expect(countChecks(checks)).toEqual({ pass: 1, fail: 1, pending: 1 });
+    expect(countChecks(checks)).toEqual({ pass: 1, fail: 1, pending: 1, gate: 0 });
     expect(checksUrlOf('https://gh/pull/1', checks)).toBe('https://ci/fail');
     expect(checksUrlOf('https://gh/pull/1', [{ conclusion: 'SUCCESS' }])).toBe('https://gh/pull/1/checks');
   });

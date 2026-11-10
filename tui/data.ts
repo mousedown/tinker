@@ -21,6 +21,8 @@ export interface Checks {
   pass: number;
   fail: number;
   pending: number;
+  /** Of the failures, those only a person can clear: an approval or review gate. */
+  gate?: number;
 }
 
 export interface Pr {
@@ -42,6 +44,13 @@ export interface Verdict {
   text: string;
 }
 
+export type StatusKind = 'green' | 'awaiting-approval' | 'ci-failing' | 'blocked';
+
+export interface Status {
+  kind: StatusKind;
+  text: string;
+}
+
 export interface Activity {
   text: string;
   at: number;
@@ -54,6 +63,7 @@ export interface Row extends Session {
   verdict: Verdict | null;
   said: string[];
   activity?: Activity | null;
+  status?: Status | null;
 }
 
 async function run(cmd: string[], cwd?: string): Promise<string> {
@@ -107,6 +117,9 @@ interface GhPr {
 }
 
 interface GhCheck {
+  name?: string;
+  context?: string;
+  workflowName?: string;
   conclusion?: string;
   status?: string;
   state?: string;
@@ -122,12 +135,20 @@ function resultOf(c: GhCheck): string {
 
 const PASSED = ['SUCCESS', 'SKIPPED', 'NEUTRAL'];
 
+const GATE = /approv|review[ _-]?gate|protected|code ?owners?|sign[ _-]?off/i;
+
+export function isGate(c: GhCheck): boolean {
+  return GATE.test([c.name, c.context, c.workflowName].filter(Boolean).join(' '));
+}
+
 export function countChecks(checks: GhCheck[] | null): Checks {
-  const out: Checks = { pass: 0, fail: 0, pending: 0 };
+  const out: Checks = { pass: 0, fail: 0, pending: 0, gate: 0 };
   for (const c of checks ?? []) {
     const r = resultOf(c);
-    if (FAILED.includes(r)) out.fail++;
-    else if (PASSED.includes(r)) out.pass++;
+    if (FAILED.includes(r)) {
+      out.fail++;
+      if (r === 'ACTION_REQUIRED' || isGate(c)) out.gate!++;
+    } else if (PASSED.includes(r)) out.pass++;
     else out.pending++;
   }
   return out;
@@ -303,15 +324,30 @@ export function verdictOf(texts: string[]): Verdict | null {
   return null;
 }
 
-export function transcript(s: Session): { verdict: Verdict | null; said: string[]; activity: Activity | null } {
+const STATUS = /^\s*`?tinker-status:\s*(green|awaiting-approval|ci-failing|blocked)\b[\s:—–-]*(.*?)`?\s*$/i;
+
+/** The `tinker-status:` line of the worker's latest final message; a TINKER line without one beside it means none. */
+export function statusOf(texts: string[]): Status | null {
+  for (let i = texts.length - 1; i >= 0; i--) {
+    const lines = texts[i].split('\n');
+    for (const line of lines) {
+      const m = STATUS.exec(line);
+      if (m) return { kind: m[1].toLowerCase() as StatusKind, text: m[2] };
+    }
+    if (verdictOf([texts[i]])) return null;
+  }
+  return null;
+}
+
+export function transcript(s: Session): { verdict: Verdict | null; said: string[]; activity: Activity | null; status: Status | null } {
   const path = transcriptPath(s);
-  if (!path) return { verdict: null, said: [], activity: null };
+  if (!path) return { verdict: null, said: [], activity: null, status: null };
   try {
     const jsonl = tail(path);
     const texts = assistantTexts(jsonl);
-    return { verdict: verdictOf(texts), said: texts.slice(-6), activity: activityOf(jsonl) };
+    return { verdict: verdictOf(texts), said: texts.slice(-6), activity: activityOf(jsonl), status: statusOf(texts) };
   } catch {
-    return { verdict: null, said: [], activity: null };
+    return { verdict: null, said: [], activity: null, status: null };
   }
 }
 

@@ -99,8 +99,32 @@ const RANK: Record<string, number> = { blocked: 0, working: 1, failed: 2, stoppe
 const DAY = 24 * 60 * 60 * 1000;
 export const STALE_MS = 7 * DAY;
 
+export type Phase = 'fixing-ci' | 'green' | 'awaiting-approval' | 'ci-failing' | 'blocked';
+
+/** Where an open PR's CI leaves the work: the worker's tinker-status line first, the checks when it has none or they have moved on. */
+export function phaseOf(r: Row): Phase | null {
+  const pr = r.pr && r.pr.state === 'OPEN' ? r.pr : null;
+  if (r.state === 'working') return pr?.ci === 'fail' ? 'fixing-ci' : null;
+  if (r.state === 'failed' || (r.pr && !pr)) return null;
+  const said = r.status?.kind ?? null;
+  if (pr?.ci === 'pass') return said === 'blocked' ? 'blocked' : 'green';
+  if (said && !(said === 'green' && pr?.ci === 'fail')) return said;
+  if (pr?.ci !== 'fail') return null;
+  const { fail, gate = 0 } = pr.checks;
+  return fail > 0 && gate >= fail ? 'awaiting-approval' : 'ci-failing';
+}
+
 export function needsYou(r: Row): boolean {
+  const phase = phaseOf(r);
+  if (phase === 'awaiting-approval' || phase === 'blocked') return true;
+  if (phase) return false;
   return r.state === 'blocked' || r.verdict?.kind === 'PARKED';
+}
+
+function rankOf(r: Row): number {
+  if (needsYou(r)) return 0;
+  if (phaseOf(r) === 'ci-failing') return 0.5;
+  return r.state === 'blocked' ? RANK.done : (RANK[r.state] ?? 5);
 }
 
 export function isLive(r: Row): boolean {
@@ -154,13 +178,9 @@ export function visible(state: State): Row[] {
       : state.rows.filter(
           (r) =>
             top.get(labelOf(r)) === r &&
-            (isLive(r) || needsYou(r) || tidyOf(r, state.now) !== null || pendingOf(state, r) !== null || state.now - r.startedAt < DAY)
+            (isLive(r) || needsYou(r) || phaseOf(r) === 'ci-failing' || tidyOf(r, state.now) !== null || pendingOf(state, r) !== null || state.now - r.startedAt < DAY)
         );
-  return [...rows].sort((a, b) => {
-    const ra = needsYou(a) ? 0 : (RANK[a.state] ?? 5);
-    const rb = needsYou(b) ? 0 : (RANK[b.state] ?? 5);
-    return ra - rb || b.startedAt - a.startedAt;
-  });
+  return [...rows].sort((a, b) => rankOf(a) - rankOf(b) || b.startedAt - a.startedAt);
 }
 
 export function selected(state: State): Row | null {
@@ -218,7 +238,7 @@ function openPr(r: Row): string | null {
   return null;
 }
 
-const END = ' End with the TINKER line, as the worker contract says.';
+const END = ' Begin your last message with the tinker-status line and end it with the TINKER line, as the worker contract says.';
 
 export const PREPARE_SKILL = join(dirname(fileURLToPath(import.meta.url)), '..', 'skills', 'prepare', 'SKILL.md');
 
@@ -234,10 +254,11 @@ export function fixCiPrompt(r: Row): string {
   const p = r.pr!;
   return (
     `Tinker command: fix CI. PR #${p.number} (branch ${p.branch}) has failing checks. Work on that branch in its ` +
-    `worktree. Read the failing checks and their logs with gh, fix what this branch broke, run the checks the ` +
-    `repo's CLAUDE.md names, commit and push. A check that fails the same way on ${p.base} is not this branch's: ` +
-    `note it on the PR and leave it. At most two re-runs of the same red check. Do not change the PR's draft ` +
-    `state and do not merge it.${END}`
+    `worktree. Read the failing checks and their logs with gh and classify each as the contract's CI stage says: ` +
+    `fix what this branch broke (run the checks the repo's CLAUDE.md names, commit and push), re-run a flaky ` +
+    `or stale gate once, and leave a human-only gate. A check that fails the same way on ${p.base} is not this ` +
+    `branch's: note it on the PR and leave it. Watch CI again after each push or re-run, at most three attempts ` +
+    `in total. Do not change the PR's draft state and do not merge it.${END}`
   );
 }
 
@@ -274,7 +295,8 @@ export const COMMANDS: Record<string, CommandSpec> = {
     verb: 'Fix CI on',
     doing: 'fixing CI',
     plan: (r) => {
-      const why = workerFree(r) ?? openPr(r) ?? (r.pr!.ci === 'fail' ? null : `CI ${r.pr!.ci}`);
+      const why =
+        workerFree(r) ?? openPr(r) ?? (r.pr!.ci !== 'fail' ? `CI ${r.pr!.ci}` : phaseOf(r) === 'awaiting-approval' ? 'awaiting approval' : null);
       return why ? { ok: false, why } : { ok: true, effect: resume(r, fixCiPrompt(r)) };
     },
   },

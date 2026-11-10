@@ -47,9 +47,9 @@ export async function loadRows(force = false): Promise<Row[]> {
   const byRoot = new Map(await Promise.all(roots.map(async (r) => [r, await prsFor(r, force)] as const)));
   const prs = new Map([...rootOf].map(([cwd, root]) => [cwd, byRoot.get(root) ?? []] as const));
   return list.map((s) => {
-    const { verdict, said, activity } = transcript(s);
+    const { verdict, said, activity, status } = transcript(s);
     const key = issueKey(s.name);
-    return { ...s, key, label: labelOf(s.name), verdict, said, activity, pr: prFor(key, prs.get(s.cwd) ?? [], verdict) };
+    return { ...s, key, label: labelOf(s.name), verdict, said, activity, status, pr: prFor(key, prs.get(s.cwd) ?? [], verdict) };
   });
 }
 

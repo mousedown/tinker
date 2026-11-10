@@ -28,25 +28,31 @@ issue-to-draft-PR job.
 
 1. **A fixed contract for each worker** ([`agents/tinker.md`](agents/tinker.md)). Each session follows
    the same steps: triage, a fresh worktree, a failing test first, the smallest fix,
-   lint/typecheck/test, a draft PR, then a self-review of at most three rounds. A bare
+   lint/typecheck/test, a draft PR, a self-review of at most three rounds, then a watch on CI that
+   fixes what the change broke, re-runs a flaky or stale check once, and stops at a gate only a
+   person can clear. A bare
    `claude --bg "fix ABC-101"` does whatever the model decides that day.
 2. **Guardrails for unattended runs.** Workers can't write to the tracker, can't merge or mark a PR
-   ready, can't force-push, and can't touch production, secrets or CI. They get two retries at most
-   before stopping. That's what makes it safe to fire off eight sessions and walk away.
+   ready, can't force-push, and can't touch production, secrets or CI settings. They get two retries
+   at a fix, and three attempts at red CI, before stopping. That's what makes it safe to fire off eight sessions and walk away.
 3. **"Park" instead of stalling.** A worker only stops for money, legal text, production data,
    credentials, customer-facing copy or a fact only you know. Every other call it makes is recorded
    under *Decisions* in the PR. A parked session leaves its question and a recommendation, and you
    answer with `claude attach`.
-4. **A result you can read by machine.** Every worker ends with `TINKER DONE <pr> P0= P1= P2=` or
-   `TINKER PARKED <class> …`. The six park classes (`missing-decision`, `dependency-wait`, `base-red`,
-   `application-defect`, `review-blocked`, `agent-mistake`) tell you whether the blocker is you, the
-   base branch, the app or the agent itself.
+4. **A result you can read by machine.** Every worker's last message starts with
+   `tinker-status: green | awaiting-approval | ci-failing | blocked <reason>` and ends with
+   `TINKER DONE <pr> P0= P1= P2=` or `TINKER PARKED <class> …`. The park classes (`missing-decision`,
+   `dependency-wait`, `base-red`, `application-defect`, `review-blocked`, `ci-failing`,
+   `agent-mistake`) tell you whether the blocker is you, the base branch, the app, CI or the agent
+   itself.
 5. **One command for many issues.** It accepts Jira keys, `#42`, issue URLs or plain descriptions. It
    handles `TINKER_KEY_PREFIX`, drops duplicates, skips issues that already have a live 🐙 session,
    applies one shared `--note`, and has `--dry-run`. It asks for confirmation above eight issues.
 6. **A TUI that shows the work, not just the processes.** `claude agents` lists sessions.
    `tinker tui` groups them by what needs you and joins each one to its PR, draft state, CI result and
-   the worker's final line.
+   the worker's final line. A finished session reads `✓ green`, `◆ awaiting approval` (a human-only
+   gate), `✕ CI failing` (jammed, not your call) or `◆ needs you`; a resumed one on red CI reads
+   `fixing CI`.
 7. **Very little code.** A short bash launcher, a one-page prompt and a small Bun TUI. With no daemon
    or database, nothing can drift out of sync with Claude Code, and native improvements come for
    free.
