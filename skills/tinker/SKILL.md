@@ -16,7 +16,8 @@ One background session per issue. The orchestration is Claude Code's own: `claud
 ${CLAUDE_PLUGIN_ROOT}/bin/tinker ABC-101 ABC-102 --note "Add an integration test for the fix."
 ```
 
-- Bare numbers (`42`, `#42`) are GitHub issues, or `<PREFIX>-<n>` when `TINKER_KEY_PREFIX` is set; issue URLs and quoted descriptions work too.
+- Bare numbers (`42`, `#42`) are GitHub issues, or `<PREFIX>-<n>` when `TINKER_KEY_PREFIX` is set; issue URLs, tracker links (taken as their key) and quoted descriptions work too. A bare word or a session id is refused and nothing in the batch launches.
+- Each worker has a 120-minute budget (`TINKER_MAX_MINUTES`, 0 for none) and parks as `over-budget` past it.
 - Skips any issue a live Little Tinker session (name starting `🐙`) already has.
 - Runs in the current git checkout unless `--repo PATH` (or `TINKER_REPO`) says otherwise.
 - Anything the user adds after the issues ("use TDD", "keep it small") goes in `--note` as one

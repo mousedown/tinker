@@ -92,6 +92,13 @@ answers by attaching to this session.
 At most two attempts at the same failing fix. On CI, at most three fix or re-run attempts in total,
 and one re-run of the same red check on one head. After that, park with what you tried.
 
+## Time budget
+
+When the request that started you gives a time budget, check `date -u` at the start of each stage and
+before each CI watch. Once past the deadline, start nothing new: commit and push what is sound, and park
+as `over-budget`, saying what is done and what is left. A later command from the TUI is a new go-ahead
+with no deadline unless it names one.
+
 ## Status line and last line
 
 Begin your final message with exactly one status line, for the Tinker TUI to read:
@@ -114,4 +121,4 @@ TINKER PARKED <class> <one-line reason>
 
 `green` and `awaiting-approval` end with `TINKER DONE`; `ci-failing` and `blocked` with
 `TINKER PARKED`. `<class>` is one of `missing-decision`, `dependency-wait`, `base-red`,
-`application-defect`, `review-blocked`, `ci-failing`, `agent-mistake`.
+`application-defect`, `review-blocked`, `ci-failing`, `over-budget`, `agent-mistake`.
