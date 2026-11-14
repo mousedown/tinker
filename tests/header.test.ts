@@ -10,7 +10,7 @@ const account = {
   limits: { fiveHour: 3, sevenDay: 46, fiveHourResetAt: null, sevenDayResetAt: null, at: NOW },
 };
 
-function state(width = 150, over: Partial<State> = {}): State {
+function state(width = 120, over: Partial<State> = {}): State {
   let s = reduce(initialState(width, 30), { type: 'rows', rows: [row({ id: 'b', state: 'blocked' }), row({ id: 'w', key: 'ABC-2', label: 'ABC-2', name: '🐙 ABC-2' })], now: NOW }).state;
   s = reduce(s, { type: 'account', account }).state;
   return { ...s, ...over };
@@ -26,7 +26,7 @@ describe('the header panel', () => {
     const bottom = l.findIndex((x) => x.startsWith('╰'));
     expect(bottom).toBe(4);
     expect(l[bottom]).toEndWith('╯');
-    for (const x of l.slice(0, bottom + 1)) expect(cells(x)).toBe(150);
+    for (const x of l.slice(0, bottom + 1)) expect(cells(x)).toBe(120);
     for (const x of l.slice(1, bottom)) {
       expect(x).toStartWith('│ ');
       expect(x).toEndWith(' │');
@@ -68,6 +68,30 @@ describe('the header panel', () => {
   });
 
   test('a newer release shows in the border', () => {
-    expect(lines(state(150, { update: '9.9.9' }))[0]).toContain('↑ 9.9.9: tinker update');
+    expect(lines(state(120, { update: '9.9.9' }))[0]).toContain('↑ 9.9.9: tinker update');
+  });
+
+  test('a big terminal holds the logo in the panel, the details beside it', () => {
+    const l = lines(state(200));
+    const bottom = l.findIndex((x) => x.startsWith('╰'));
+    expect(bottom).toBe(7);
+    for (const x of l.slice(0, bottom + 1)) expect(cells(x)).toBe(200);
+    for (const x of l.slice(1, bottom)) expect(x).toMatch(/^│ .*[█▀▄].* │$/);
+    expect(l[1]).toContain('◆ 1 need you');
+    expect(l[2]).toContain('D draft ○  M merge ○  T tidy ○');
+    expect(l[3]).toContain('◉ a@b.io · Max 20x · claude-work2');
+    expect(l[4]).toContain('week 46%');
+    expect(l[6]).toContain('Little Tinker • fixes issues as native background sessions');
+  });
+
+  test('a 140-column terminal already gets the logo', () => {
+    const l = lines(state(140));
+    expect(l.findIndex((x) => x.startsWith('╰'))).toBe(7);
+    for (const x of l.slice(0, 8)) expect(cells(x)).toBe(140);
+  });
+
+  test('a short terminal keeps the compact panel even when wide', () => {
+    const s = { ...state(200), height: 20 };
+    expect(lines(s).findIndex((x) => x.startsWith('╰'))).toBe(4);
   });
 });

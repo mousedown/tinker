@@ -1,7 +1,8 @@
+import { LOGO_WIDTH, TAGLINE, logo } from './brand';
 import type { Row } from './data';
 import { markdown } from './markdown';
 import { keyLines, paint, type Hint } from './render/paint';
-import { headerRow, layout, tableRow, type Column } from './render/table';
+import { fit as fitCells, headerRow, layout, tableRow, type Column } from './render/table';
 import type { Seg } from './render/text';
 import { AMBER, BLUE, BOLD, BRASS, DIM, GREEN, INK, INK2, MAGENTA, RED, SKY } from './render/theme';
 import { MENU, fit, isLive, landed, needsYou, newest, pendingOf, phaseOf, selected, selectedIssue, shownIssues, targets, ticketOf, tidyOf, visible, type State, type Tracker } from './state';
@@ -180,14 +181,22 @@ export function tabs(state: State, inside: string[] = []): Seg[] {
   return segs;
 }
 
-/** `│ left ··· right │`, exactly `width` cells; the right side goes first when there's no room. */
-function boxRow(left: Seg[], right: Seg[], width: number): Seg[] {
-  const inner = width - 4;
-  const fits = right.length > 0 && segsWidth(left) + 3 + segsWidth(right) <= inner;
-  const body = truncate(left, inner);
+/** `left ··· right`, exactly `width` cells; the right side goes first when there's no room. */
+function spread(left: Seg[], right: Seg[], width: number): Seg[] {
+  const fits = right.length > 0 && segsWidth(left) + 3 + segsWidth(right) <= width;
+  const body = truncate(left, width);
   const used = segsWidth(body) + (fits ? segsWidth(right) : 0);
-  return [['│ ', DIM], ...body, [' '.repeat(Math.max(0, inner - used)), null], ...(fits ? right : []), [' │', DIM]];
+  return [...body, [' '.repeat(Math.max(0, width - used)), null], ...(fits ? right : [])];
 }
+
+/** `│ left ··· right │`, exactly `width` cells. */
+function boxRow(left: Seg[], right: Seg[], width: number): Seg[] {
+  return [['│ ', DIM], ...spread(left, right, width - 4), [' │', DIM]];
+}
+
+/** Wide and tall enough for the pixel logo inside the panel, with the details beside it. */
+const BIG_WIDTH = 130;
+const BIG_HEIGHT = 24;
 
 /** The border: `╭─ title ──── tag ─╮`, the tag dropped before the title is cut. */
 function boxEdge(title: Seg[], tag: Seg[], width: number): Seg[] {
@@ -207,6 +216,17 @@ function header(state: State, steps: string[], sums: Seg[] = summary(state), rig
   const bySession = new Map(state.rows.map((r) => [r.sessionId, r.tokens ? total(r.tokens) : 0] as const));
   const usage = usageStrip(state.account, [...bySession.values()].reduce((n, t) => n + t, 0), state.now);
   const machine: Seg[] = state.machine ? machineStrip(state.machine) : [['measuring the machine…', DIM]];
+  const bottom: Seg[] = [['╰', DIM], ['─'.repeat(Math.max(0, w - 2)), DIM], ['╯', DIM]];
+  if (w >= BIG_WIDTH && state.height >= BIG_HEIGHT) {
+    const side = w - 4 - LOGO_WIDTH - 3;
+    const beside: Seg[][] = [sums, right, identity(state.account), usage, machine, TAGLINE];
+    return [
+      boxEdge(tabs(state, steps), versionTag(state), w),
+      ...logo().map((art, i): Seg[] => [['│ ', DIM], ...fitCells(art, LOGO_WIDTH), ['   ', null], ...spread(beside[i] ?? [], [], side), [' │', DIM]]),
+      bottom,
+      [],
+    ];
+  }
   return [
     boxEdge(tabs(state, steps), versionTag(state), w),
     boxRow(sums, right, w),
