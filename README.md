@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/banner.svg" alt="Little Tinker: a pixel-art octopus beside the words LITTLE TINKER" width="520">
+  <img src="assets/banner.svg" alt="Little Tinker: a pixel-art octopus beside the words LITTLE TINKER" width="600">
 </p>
 
 <p align="center">

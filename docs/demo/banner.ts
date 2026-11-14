@@ -1,14 +1,26 @@
 #!/usr/bin/env bun
-// The README banner, drawn from the same pixel grids the TUI paints its header with
-// (tui/brand.ts), so the two never drift. Regenerate from the repository root:
+// The README banner: the TUI's pixel octopus and TINKER wordmark (tui/brand.ts), with LITTLE
+// set above it in the same shadowed block face, so the two words read as one lockup with a
+// single gradient running through both. Regenerate from the repository root:
 //
 //   bun docs/demo/banner.ts
 
 import { OCTOPUS, PAL, SKY_RAMP, WORD } from '../../tui/brand';
 
-const PX = 10; // one octopus pixel; a terminal cell is PX wide and 2 PX tall
+const PX = 10; // a terminal cell is PX wide and 2 PX tall
 const CELL_H = PX * 2;
-const GAP = 2 * PX;
+const OCTO_PX = 20; // the octopus spans both lines of the wordmark
+const GAP = 3 * PX;
+
+// LITTLE in the same ANSI Shadow face as tui/brand.ts's TINKER, letters set tight the same way.
+const GLYPHS: Record<string, string[]> = {
+  L: ['██╗     ', '██║     ', '██║     ', '██║     ', '███████╗', '╚══════╝'],
+  I: ['██╗', '██║', '██║', '██║', '██║', '╚═╝'],
+  T: ['████████╗', '╚══██╔══╝', '   ██║   ', '   ██║   ', '   ██║   ', '   ╚═╝   '],
+  E: ['███████╗', '██╔════╝', '█████╗  ', '██╔══╝  ', '███████╗', '╚══════╝'],
+};
+const LITTLE = GLYPHS.L.map((_, row) => [...'LITTLE'].map((ch) => GLYPHS[ch][row]).join(''));
+const LINES = [...LITTLE, ...WORD];
 
 type Rgb = number[];
 const mix = (a: Rgb, b: Rgb, t: number) => a.map((v, i) => Math.round(v + (b[i] - v) * t));
@@ -18,17 +30,18 @@ const hex = (c: Rgb) => `#${c.map((v) => v.toString(16).padStart(2, '0')).join('
 const TENTACLES = 7; // rows of OCTOPUS from here down sway
 const isEye = (ch: string) => ch === 'W' || ch === 'K';
 
-function octopus(): string {
+function octopus(y0: number): string {
   const body: string[] = [];
   const arms: string[] = [];
   const lids: string[] = [];
+  const cell = (x: number, y: number, fill: string) =>
+    `<rect x="${x * OCTO_PX}" y="${y0 + y * OCTO_PX}" width="${OCTO_PX}" height="${OCTO_PX}" fill="${fill}"/>`;
   OCTOPUS.forEach((line, y) =>
     [...line].forEach((ch, x) => {
       const fill = PAL[ch];
       if (!fill) return;
-      const rect = `<rect x="${x * PX}" y="${y * PX}" width="${PX}" height="${PX}" fill="${fill}"/>`;
-      (y >= TENTACLES ? arms : body).push(rect);
-      if (isEye(ch)) lids.push(`<rect x="${x * PX}" y="${y * PX}" width="${PX}" height="${PX}" fill="${PAL.B}"/>`);
+      (y >= TENTACLES ? arms : body).push(cell(x, y, fill));
+      if (isEye(ch)) lids.push(cell(x, y, PAL.B));
     })
   );
   return `<g>${body.join('')}</g><g class="arms">${arms.join('')}</g><g class="lids">${lids.join('')}</g>`;
@@ -51,8 +64,8 @@ function shadow(ch: string, x0: number, y0: number): string {
 
 function wordmark(x0: number): string {
   const out: string[] = [];
-  WORD.forEach((line, row) => {
-    const face = ramp(row / (WORD.length - 1));
+  LINES.forEach((line, row) => {
+    const face = ramp(row / (LINES.length - 1));
     const dark = hex(face.map((v) => Math.round(v * 0.55)));
     let d = '';
     [...line].forEach((ch, col) => {
@@ -66,33 +79,12 @@ function wordmark(x0: number): string {
   return out.join('');
 }
 
-// "LITTLE", in a 3×5 pixel face above the wordmark, in the octopus's amber.
-const FONT: Record<string, string[]> = {
-  L: ['#..', '#..', '#..', '#..', '###'],
-  I: ['###', '.#.', '.#.', '.#.', '###'],
-  T: ['###', '.#.', '.#.', '.#.', '.#.'],
-  E: ['###', '#..', '##.', '#..', '###'],
-};
-const SMALL = 6;
-const LITTLE_H = 5 * SMALL;
-const LITTLE_GAP = 10;
-
-function little(x0: number): string {
-  const out: string[] = [];
-  [...'LITTLE'].forEach((ch, i) =>
-    FONT[ch].forEach((line, y) =>
-      [...line].forEach((c, x) => {
-        if (c === '#') out.push(`<rect x="${x0 + (i * 4 + x) * SMALL}" y="${y * SMALL}" width="${SMALL}" height="${SMALL}" fill="${PAL.B}"/>`);
-      })
-    )
-  );
-  return out.join('');
-}
-
-const octoW = OCTOPUS[0].length * PX;
-const width = octoW + GAP + WORD[0].length * PX;
-const TOP = LITTLE_H + LITTLE_GAP;
-const height = TOP + Math.max(OCTOPUS.length * PX, WORD.length * CELL_H);
+const octoW = OCTOPUS[0].length * OCTO_PX;
+const wordW = Math.max(...LINES.map((l) => l.trimEnd().length)) * PX;
+const wordH = LINES.length * CELL_H;
+const octoH = (OCTOPUS.length - 1) * OCTO_PX; // the grid's last row is blank
+const width = octoW + GAP + wordW;
+const height = Math.max(octoH, wordH);
 
 const style = `
   .arms { transform-box: fill-box; transform-origin: 50% 0; animation: sway 1.2s steps(1) infinite; }
@@ -102,13 +94,14 @@ const style = `
   @media (prefers-reduced-motion: reduce) { .arms, .lids { animation: none; } }
 `;
 
-const svg = (w: number, body: string, title: string) =>
-  `<svg xmlns="http://www.w3.org/2000/svg" viewBox="-12 -4 ${w + 24} ${height + 8}" width="${w + 24}" height="${height + 8}" shape-rendering="crispEdges" role="img">
-<title>${title}</title>
+await Bun.write(
+  'assets/banner.svg',
+  `<svg xmlns="http://www.w3.org/2000/svg" viewBox="-12 -8 ${width + 24} ${height + 16}" width="${width + 24}" height="${height + 16}" shape-rendering="crispEdges" role="img">
+<title>Little Tinker</title>
 <style>${style}</style>
-${body}
+${octopus((height - octoH) / 2)}
+${wordmark(octoW + GAP)}
 </svg>
-`;
-
-await Bun.write('assets/banner.svg', svg(width, little(octoW + GAP) + `<g transform="translate(0 ${TOP})">${octopus()}${wordmark(octoW + GAP)}</g>`, 'Little Tinker'));
+`
+);
 console.log(`assets/banner.svg ${width}×${height}`);
