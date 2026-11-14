@@ -1,6 +1,9 @@
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import type { Row } from './data';
+import type { AccountView } from './account';
+import { launchBatches, matches, sessionFor, type Issue } from './issues';
+import { TOKEN_PAGE } from './jira';
 import type { MachineView } from './machine';
 import type { Key } from './runtime/keys';
 import { DEFAULTS, type Settings } from './settings';
@@ -11,9 +14,28 @@ export type Tone = 'info' | 'error';
 export type Tidy = 'merged' | 'closed' | 'stale';
 export type Group = 'needs' | 'live' | 'tidy' | 'done';
 
-export interface Input {
-  kind: 'new';
-  text: string;
+export type Page = 'sessions' | 'issues';
+
+export type Input =
+  | { kind: 'new'; text: string }
+  | { kind: 'jira'; field: 'site' | 'email' | 'token'; site: string; email: string; token: string };
+
+export interface Tracker {
+  state: 'connected' | 'disconnected' | 'rejected' | 'unreachable' | 'loading';
+  who: string | null;
+}
+
+export interface IssuesState {
+  list: Issue[];
+  /** The selected issue's URL: keys repeat across repos (GH-7 in two of them), URLs don't. */
+  selKey: string | null;
+  /** Ticked issues, by URL. */
+  marks: string[];
+  filter: string;
+  filtering: boolean;
+  jira: Tracker;
+  github: Tracker;
+  loadedAt: number | null;
 }
 
 export interface Confirm {
@@ -32,6 +54,8 @@ export interface State {
   selId: string | null;
   filter: Filter;
   view: View;
+  page: Page;
+  issues: IssuesState;
   input: Input | null;
   confirm: Confirm | null;
   menu: number | null;
@@ -40,6 +64,7 @@ export interface State {
   tidying: string[];
   pending: Record<string, Pending>;
   machine: MachineView | null;
+  account: AccountView | null;
   /** A newer release than this one, when the launcher has seen one. */
   update: string | null;
   message: { text: string; tone: Tone } | null;
@@ -54,8 +79,10 @@ export type Msg =
   | { type: 'key'; key: Key }
   | { type: 'resize'; width: number; height: number }
   | { type: 'machine'; machine: MachineView; now?: number }
+  | { type: 'account'; account: AccountView }
+  | { type: 'issues'; list: Issue[]; jira: Tracker; github: Tracker; now: number }
   | { type: 'done'; label: string }
-  | { type: 'message'; text: string; tone: Tone };
+  | { type: 'message'; text: string; tone: Tone; /** Shown only while this page is open. */ page?: Page };
 
 export type Effect =
   | { type: 'attach'; id: string }
@@ -68,6 +95,10 @@ export type Effect =
   | { type: 'settings'; settings: Settings }
   | { type: 'open'; url: string }
   | { type: 'refresh' }
+  | { type: 'load-issues' }
+  | { type: 'launch-batch'; batches: string[] }
+  | { type: 'jira-connect'; site: string; email: string; token: string }
+  | { type: 'gh-login' }
   | { type: 'quit' };
 
 export interface Step {
@@ -81,6 +112,17 @@ export function initialState(width: number, height: number, settings: Settings =
     selId: null,
     filter: 'active',
     view: 'list',
+    page: 'sessions',
+    issues: {
+      list: [],
+      selKey: null,
+      marks: [],
+      filter: '',
+      filtering: false,
+      jira: { state: 'loading', who: null },
+      github: { state: 'loading', who: null },
+      loadedAt: null,
+    },
     input: null,
     confirm: null,
     menu: null,
@@ -89,6 +131,7 @@ export function initialState(width: number, height: number, settings: Settings =
     tidying: [],
     pending: {},
     machine: null,
+    account: null,
     update: null,
     message: null,
     loaded: false,
@@ -466,8 +509,28 @@ function reduceMenu(state: State, key: Key): Step {
   return { state, effects: [] };
 }
 
+const NEXT_FIELD = { site: 'email', email: 'token' } as const;
+
+function reduceJiraForm(state: State, key: Key): Step {
+  const input = state.input as Extract<Input, { kind: 'jira' }>;
+  if (key.name === 'esc' || key.name === 'ctrl-c') return { state: say({ ...state, input: null }, 'Jira not connected.'), effects: [] };
+  const value = input[input.field];
+  if (key.name === 'enter') {
+    if (!value.trim()) return { state, effects: [] };
+    if (input.field === 'token') {
+      const { site, email, token } = input;
+      return { state: say({ ...state, input: null }, `Connecting to ${site.trim()}…`), effects: [{ type: 'jira-connect', site: site.trim(), email: email.trim(), token: token.trim() }] };
+    }
+    return { state: { ...state, input: { ...input, field: NEXT_FIELD[input.field] } }, effects: [] };
+  }
+  if (key.name === 'backspace') return { state: { ...state, input: { ...input, [input.field]: value.slice(0, -1) } }, effects: [] };
+  if (key.name === 'char' && key.ch) return { state: { ...state, input: { ...input, [input.field]: value + key.ch } }, effects: [] };
+  return { state, effects: [] };
+}
+
 function reduceInput(state: State, key: Key): Step {
-  const input = state.input!;
+  if (state.input!.kind === 'jira') return reduceJiraForm(state, key);
+  const input = state.input as Extract<Input, { kind: 'new' }>;
   if (key.name === 'esc' || key.name === 'ctrl-c') return { state: { ...state, input: null }, effects: [] };
   if (key.name === 'enter') {
     const args = input.text.trim();
@@ -492,6 +555,7 @@ function reduceKey(state: State, key: Key): Step {
   if (state.input !== null) return reduceInput(state, key);
   if (state.confirm) return reduceConfirm(state, key);
   if (state.menu !== null) return reduceMenu(state, key);
+  if (state.page === 'issues') return reduceIssuesKey(state, key);
 
   const row = selected(state);
   const ch = key.name === 'char' ? key.ch : undefined;
@@ -504,7 +568,8 @@ function reduceKey(state: State, key: Key): Step {
   if (key.name === 'pagedown') return { state: move(fresh, 10), effects: [] };
   if (key.name === 'home') return { state: move(fresh, 'home'), effects: [] };
   if (key.name === 'end') return { state: move(fresh, 'end'), effects: [] };
-  if (key.name === 'tab' || ch === 'f')
+  if (key.name === 'tab') return { state: { ...fresh, page: 'issues' }, effects: [{ type: 'load-issues' }] };
+  if (ch === 'f')
     return { state: { ...fresh, filter: state.filter === 'active' ? 'all' : 'active' }, effects: [] };
   if (ch === 'n') return { state: { ...fresh, input: { kind: 'new', text: '' } }, effects: [] };
   if (ch === 'm' || ch === ':') {
@@ -587,14 +652,117 @@ export function reduce(state: State, msg: Msg): Step {
       return { state: { ...state, width: msg.width, height: msg.height }, effects: [] };
     case 'machine':
       return { state: { ...state, machine: msg.machine, now: msg.now ?? state.now }, effects: [] };
+    case 'account':
+      return { state: { ...state, account: msg.account }, effects: [] };
+    case 'issues': {
+      const keys = new Set(msg.list.map((i) => i.url));
+      const issues: IssuesState = {
+        ...state.issues,
+        list: msg.list,
+        jira: msg.jira,
+        github: msg.github,
+        loadedAt: msg.now,
+        marks: state.issues.marks.filter((k) => keys.has(k)),
+        selKey: state.issues.selKey && keys.has(state.issues.selKey) ? state.issues.selKey : null,
+      };
+      return { state: { ...state, issues }, effects: [] };
+    }
     case 'done': {
       const pending = { ...state.pending };
       delete pending[msg.label];
       return { state: { ...state, pending }, effects: [] };
     }
     case 'message':
+      if (msg.page && msg.page !== state.page) return { state, effects: [] };
       return { state: say(state, msg.text, msg.tone), effects: [] };
     case 'key':
       return reduceKey(state, msg.key);
   }
+}
+
+export function shownIssues(state: State): Issue[] {
+  return state.issues.list.filter((i) => matches(i, state.issues.filter)).sort((a, b) => b.updatedAt - a.updatedAt);
+}
+
+export function selectedIssue(state: State): Issue | null {
+  const shown = shownIssues(state);
+  return shown.find((i) => i.url === state.issues.selKey) ?? shown[0] ?? null;
+}
+
+function withIssues(state: State, patch: Partial<IssuesState>): State {
+  return { ...state, issues: { ...state.issues, ...patch } };
+}
+
+function moveIssue(state: State, by: number): State {
+  const shown = shownIssues(state);
+  if (!shown.length) return state;
+  const at = Math.max(0, shown.findIndex((i) => i.url === selectedIssue(state)?.url));
+  return withIssues(state, { selKey: shown[Math.min(shown.length - 1, Math.max(0, at + by))].url });
+}
+
+function launchIssues(state: State): Step {
+  const shown = shownIssues(state);
+  const ticked = state.issues.marks.map((u) => state.issues.list.find((i) => i.url === u)).filter((i): i is Issue => Boolean(i));
+  const sel = selectedIssue(state);
+  const picks = ticked.length ? ticked : sel && shown.includes(sel) ? [sel] : [];
+  if (!picks.length) return { state: say(state, 'Nothing selected.', 'error'), effects: [] };
+  const running = (i: Issue) => {
+    const r = sessionFor(i, state.rows);
+    return r !== null && isLive(r);
+  };
+  const live = picks.filter(running).map((i) => i.key);
+  const go = picks.filter((i) => !running(i));
+  if (!go.length) return { state: say(state, `${live.join(', ')} already ha${live.length === 1 ? 's a running session' : 've running sessions'}; tab to see ${live.length === 1 ? 'it' : 'them'}.`), effects: [] };
+  const keys = go.map((i) => i.key);
+  const pending = { ...state.pending };
+  for (const k of keys) pending[k] = { verb: 'launching', since: state.now, waitFor: 'session' };
+  const note = live.length ? ` (skipped ${live.join(', ')}, it already has a running session)` : '';
+  return {
+    state: say(withIssues({ ...state, page: 'sessions', pending }, { marks: [] }), `Launching ${keys.join(', ')}${note}…`),
+    effects: [{ type: 'launch-batch', batches: launchBatches(go) }],
+  };
+}
+
+function reduceIssuesKey(state: State, key: Key): Step {
+  const ch = key.name === 'char' ? key.ch : undefined;
+  const fresh = { ...state, message: null };
+  const is = state.issues;
+
+  if (is.filtering) {
+    if (key.name === 'esc') return { state: withIssues(fresh, { filtering: false, filter: '' }), effects: [] };
+    if (key.name === 'enter') return { state: withIssues(fresh, { filtering: false }), effects: [] };
+    if (key.name === 'backspace') return { state: withIssues(fresh, { filter: is.filter.slice(0, -1) }), effects: [] };
+    if (ch) return { state: withIssues(fresh, { filter: is.filter + ch, selKey: null }), effects: [] };
+    if (key.name !== 'up' && key.name !== 'down') return { state: fresh, effects: [] };
+  }
+
+  if (key.name === 'ctrl-c' || ch === 'q') return { state, effects: [{ type: 'quit' }] };
+  if (key.name === 'tab' || key.name === 'esc') return { state: { ...fresh, page: 'sessions' }, effects: [] };
+  if (key.name === 'up' || key.name === 'wheel-up' || ch === 'k') return { state: moveIssue(fresh, -1), effects: [] };
+  if (key.name === 'down' || key.name === 'wheel-down' || ch === 'j') return { state: moveIssue(fresh, 1), effects: [] };
+  if (key.name === 'pageup') return { state: moveIssue(fresh, -10), effects: [] };
+  if (key.name === 'pagedown') return { state: moveIssue(fresh, 10), effects: [] };
+  if (ch === '/') return { state: withIssues(fresh, { filtering: true }), effects: [] };
+  if (ch === 'r') return { state: say(fresh, 'Refreshing issues…'), effects: [{ type: 'load-issues' }] };
+  if (ch === 'J')
+    return { state: { ...fresh, input: { kind: 'jira', field: 'site', site: '', email: '', token: '' } }, effects: [{ type: 'open', url: TOKEN_PAGE }] };
+  if (ch === 'G') {
+    if (is.github.state === 'connected') return { state: say(fresh, `GitHub is connected as ${is.github.who}.`), effects: [] };
+    return { state: say(fresh, 'Opening GitHub sign-in…'), effects: [{ type: 'gh-login' }] };
+  }
+  if (ch === '*') {
+    const keys = shownIssues(state).map((i) => i.url);
+    const all = keys.length > 0 && keys.every((k) => is.marks.includes(k));
+    return { state: withIssues(fresh, { marks: all ? is.marks.filter((k) => !keys.includes(k)) : [...new Set([...is.marks, ...keys])] }), effects: [] };
+  }
+  if (key.name === 'enter') return launchIssues(fresh);
+
+  const sel = selectedIssue(state);
+  if (!sel) return { state: fresh, effects: [] };
+  if (ch === ' ') {
+    const marks = is.marks.includes(sel.url) ? is.marks.filter((u) => u !== sel.url) : [...is.marks, sel.url];
+    return { state: withIssues(fresh, { marks, selKey: sel.url }), effects: [] };
+  }
+  if (ch === 'o') return { state: fresh, effects: [{ type: 'open', url: sel.url }] };
+  return { state: fresh, effects: [] };
 }

@@ -11,6 +11,7 @@ const run = (...args: string[]) =>
 
 interface Fake {
   id: string;
+  name?: string;
   pid?: number;
   state?: string;
 }
@@ -22,7 +23,7 @@ interface Fake {
 function machine(live: Fake[] | number = [], opts: { ps?: string; peaks?: string } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'tinker-cli-'));
   const fakes: Fake[] = typeof live === 'number' ? Array.from({ length: live }, (_, i) => ({ id: `z${i}` })) : live;
-  const list = JSON.stringify(fakes.map((f, i) => ({ kind: 'background', name: `🐙 ZZZ-${i}`, state: f.state ?? 'working', id: f.id, pid: f.pid ?? null })));
+  const list = JSON.stringify(fakes.map((f, i) => ({ kind: 'background', name: f.name ?? `🐙 ZZZ-${i}`, state: f.state ?? 'working', id: f.id, pid: f.pid ?? null })));
   writeFileSync(join(dir, 'claude'), `#!/bin/sh\n[ "$1" = agents ] && echo '${list}'\nexit 0\n`);
   chmodSync(join(dir, 'claude'), 0o755);
   writeFileSync(join(dir, 'ps'), opts.ps ?? '');
@@ -91,6 +92,11 @@ describe('room to launch', () => {
   // 16 GB, 8 GB of it free. With no readings yet a session is budgeted 2 GB, and a 10% reserve
   // leaves room for three.
   const MEM = { TINKER_MEM_MB: '16384 8192' };
+
+  test('a live session skips only its own issue, not one whose key is a prefix of it', () => {
+    const m = machine([{ id: 'a', name: '🐙 ABC-12' }]);
+    expect(m.launch({ TINKER_SESSION_MB: '0' }, 'ABC-1', 'ABC-12')).toEqual(['ABC-1 dry-run', 'ABC-12 skipped']);
+  });
   const now = () => Math.floor(Date.now() / 1000);
   // ps -A -o pid=,ppid=,rss= (KB): session 100 runs a build (101) under it, 200 sits idle.
   const PS = ['1 0 1000', '100 1 400000', '101 100 2700000', '200 1 300000', '999 1 9000000'].join('\n');

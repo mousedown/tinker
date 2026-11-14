@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 import { existsSync } from 'fs';
+import { platform } from 'os';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import {
@@ -10,10 +11,14 @@ import {
   repoRoot,
   sessions,
   transcript,
+  transcriptPath,
   withoutClaudeCode,
   type Pr,
   type Row,
 } from './data';
+import { claudeDir, parseAuthStatus, readLimits, tokensOf, type Account } from './account';
+import { credsFile, credsFromEnv, jiraMyself, normaliseSite, saveCreds, type Fetch, type Run } from './jira';
+import { loadIssues } from './load-issues';
 import { machineSampler } from './machine';
 import { decode } from './runtime/keys';
 import { openUrl, restoreOnExit, terminal } from './runtime/tty';
@@ -29,6 +34,9 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const LAUNCHER = join(ROOT, 'bin', 'tinker');
 const POLL_MS = 2000;
 const PR_MS = 20000;
+const LIMITS_MS = 30_000;
+const ISSUES_MS = 60_000;
+const ACCOUNT_MS = 10 * 60_000;
 
 const prCache = new Map<string, { at: number; prs: Pr[] }>();
 
@@ -50,7 +58,17 @@ export async function loadRows(force = false): Promise<Row[]> {
   return list.map((s) => {
     const { verdict, said, activity, status, branch } = transcript(s);
     const key = issueKey(s.name);
-    return { ...s, key, label: labelOf(s.name), verdict, said, activity, status, pr: prFor(key, prs.get(s.cwd) ?? [], verdict, branch) };
+    return {
+      ...s,
+      key,
+      label: labelOf(s.name),
+      verdict,
+      said,
+      activity,
+      status,
+      tokens: tokensOf(transcriptPath(s)),
+      pr: prFor(key, prs.get(s.cwd) ?? [], verdict, branch),
+    };
   });
 }
 
@@ -69,6 +87,38 @@ async function capture(cmd: string[], cwd?: string): Promise<{ ok: boolean; out:
   const code = await proc.exited;
   return { ok: code === 0, out: (out + err).trim() };
 }
+
+/** Runs a command with optional stdin, so a secret never goes into argv. */
+export const runCommand: Run = async (cmd, stdin, cwd) => {
+  if (cwd && !existsSync(cwd)) return { code: 1, out: '' };
+  try {
+    const proc = Bun.spawn(cmd, {
+      cwd,
+      stdin: stdin === undefined ? 'ignore' : Buffer.from(stdin),
+      stdout: 'pipe',
+      stderr: 'pipe',
+      env: withoutClaudeCode(),
+    });
+    const [out, err] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text()]);
+    return { code: await proc.exited, out: out + err };
+  } catch {
+    return { code: 127, out: '' };
+  }
+};
+
+/** Hands the terminal to a command. A missing command is reported, never thrown. */
+export async function spawnInteractive(cmd: string[]): Promise<{ ok: boolean; missing: boolean }> {
+  try {
+    const proc = Bun.spawn(cmd, { stdin: 'inherit', stdout: 'inherit', stderr: 'inherit', env: withoutClaudeCode() });
+    return { ok: (await proc.exited) === 0, missing: false };
+  } catch {
+    return { ok: false, missing: true };
+  }
+}
+
+const fetchJira: Fetch = (url, init) => fetch(url, { headers: init.headers, signal: AbortSignal.timeout(15_000) });
+
+const JIRA_WHY = { rejected: 'Jira rejected that email and token.', unreachable: 'Could not reach that Jira site.', error: 'Jira answered with an error.' } as const;
 
 const mergeFlags = new Map<string, string>();
 
@@ -213,8 +263,71 @@ async function main(): Promise<void> {
     done();
   };
 
+  let issuesBusy = false;
+  let issuesAt = 0;
+  const loadIssuesNow = async () => {
+    if (issuesBusy) return;
+    issuesBusy = true;
+    issuesAt = Date.now();
+    try {
+      const here = (await capture(['git', 'rev-parse', '--show-toplevel'])).out.trim();
+      const roots = await Promise.all([...new Set(state.rows.map((r) => r.cwd))].map((c) => repoRoot(c)));
+      const repos = [...new Set([...(here && existsSync(here) ? [here] : []), ...roots])];
+      const r = await loadIssues({
+        run: runCommand,
+        fetch: fetchJira,
+        env: process.env,
+        platform: platform(),
+        file: credsFile(),
+        jql: state.settings.jql,
+        prefix: process.env.TINKER_KEY_PREFIX || null,
+        repos,
+      });
+      dispatch({ type: 'issues', ...r, now: Date.now() });
+    } catch (error) {
+      dispatch({ type: 'message', text: `Could not load issues: ${String(error)}`, tone: 'error', page: 'issues' });
+    } finally {
+      issuesBusy = false;
+    }
+  };
+
   async function run(effect: Effect): Promise<void> {
     switch (effect.type) {
+      case 'load-issues':
+        await loadIssuesNow();
+        return;
+      case 'jira-connect': {
+        const creds = { site: normaliseSite(effect.site), email: effect.email, token: effect.token };
+        const me = await jiraMyself(creds, fetchJira);
+        if (!me.ok) {
+          dispatch({ type: 'message', text: me.why === 'unreachable' ? `Could not reach ${creds.site}.` : JIRA_WHY[me.why], tone: 'error', page: 'issues' });
+          return;
+        }
+        try {
+          await saveCreds(creds, runCommand, platform(), credsFile());
+        } catch {
+          dispatch({ type: 'message', text: 'Connected, but the token could not be saved.', tone: 'error', page: 'issues' });
+          return;
+        }
+        const env = credsFromEnv(process.env) ? ' JIRA_* environment variables are set, and they take precedence.' : '';
+        dispatch({ type: 'message', text: `Jira connected as ${me.name}.${env}`, tone: 'info', page: 'issues' });
+        await loadIssuesNow();
+        return;
+      }
+      case 'gh-login': {
+        paused = true;
+        term.leave();
+        process.stdout.write('\x1b[2J\x1b[H\x1b[2mSigning in to GitHub with gh. Tinker comes back when it finishes.\x1b[0m\n');
+        const login = await spawnInteractive(['gh', 'auth', 'login', '--web', '--hostname', 'github.com']);
+        term.enter();
+        paused = false;
+        prev = null;
+        state = { ...state, width: width(), height: height() };
+        draw();
+        if (login.missing) dispatch({ type: 'message', text: 'gh is not installed. Install it (brew install gh), then press G again.', tone: 'error', page: 'issues' });
+        await loadIssuesNow();
+        return;
+      }
       case 'quit':
         stop();
         return;
@@ -245,6 +358,18 @@ async function main(): Promise<void> {
         dispatch({ type: 'message', text: r.text, tone: r.ok ? 'info' : 'error' });
         if (effect.type !== 'resume' || !r.ok) dispatch({ type: 'done', label: effect.label });
         await refresh(true);
+        return;
+      }
+      case 'launch-batch': {
+        const said: string[] = [];
+        let ok = true;
+        for (const args of effect.batches) {
+          const r = await capture([LAUNCHER, ...splitArgs(args)]);
+          ok &&= r.ok;
+          said.push(...r.out.split('\n').filter(Boolean).map((l) => l.split('\t').slice(0, 2).join(' ')));
+          await refresh();
+        }
+        dispatch({ type: 'message', text: said.join(' · ') || (ok ? 'Launched.' : 'Launch failed.'), tone: ok ? 'info' : 'error' });
         return;
       }
       case 'launch': {
@@ -295,9 +420,23 @@ async function main(): Promise<void> {
     }
   };
   void measure();
+  let account: Account | null = null;
+  let accountAt = 0;
+  const who = async () => {
+    if (!account || Date.now() - accountAt > ACCOUNT_MS) {
+      const r = await capture(['claude', 'auth', 'status', '--json']);
+      account = parseAuthStatus(r.out, claudeDir()) ?? account;
+      accountAt = Date.now();
+    }
+    dispatch({ type: 'account', account: { account, limits: readLimits() } });
+  };
+  void who();
+  let polls = 0;
   const timer = setInterval(() => {
     void refresh();
     void measure();
+    if (++polls % (LIMITS_MS / POLL_MS) === 0) void who();
+    if (state.page === 'issues' && Date.now() - issuesAt >= ISSUES_MS) void loadIssuesNow();
   }, POLL_MS);
   const ticker = setInterval(() => {
     state = { ...state, now: Date.now() };

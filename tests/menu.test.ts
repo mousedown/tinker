@@ -89,8 +89,8 @@ describe('menu', () => {
   test('D, M and T flip the toggles and persist them', () => {
     const step = reduce(loaded(), key('D'));
     expect(step.state.settings.draft).toBe(true);
-    expect(step.effects).toEqual([{ type: 'settings', settings: { draft: true, autoMerge: false, autoTidy: false } }]);
-    expect(press(loaded(), 'M', 'T').settings).toEqual({ draft: false, autoMerge: true, autoTidy: true });
+    expect(step.effects).toEqual([{ type: 'settings', settings: { draft: true, autoMerge: false, autoTidy: false, jql: null } }]);
+    expect(press(loaded(), 'M', 'T').settings).toEqual({ draft: false, autoMerge: true, autoTidy: true, jql: null });
   });
 
   test('m opens the menu; a letter or enter runs an item on the ticked rows', () => {

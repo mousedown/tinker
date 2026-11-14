@@ -333,7 +333,7 @@ launch() {
     [ -n "$REVIEW" ] && { [[ "$prompt" == *. ]] || prompt+="."; prompt+=" Self-review with $REVIEW."; }
     [ -n "$budget_note" ] && { [[ "$prompt" == *. ]] || prompt+="."; prompt+=" $budget_note"; }
 
-    if [ -n "$live" ] && grep -qF -- "$label" <<<"$live"; then
+    if [ -n "$live" ] && grep -qxF -- "$TAG $label" <<<"$live"; then
       printf '%s\tskipped\ta live Little Tinker session already has it\n' "$label"; continue
     fi
 

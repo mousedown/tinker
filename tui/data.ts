@@ -1,6 +1,6 @@
 import { closeSync, existsSync, fstatSync, openSync, readSync, readdirSync } from 'fs';
-import { homedir } from 'os';
 import { dirname, join } from 'path';
+import { claudeDir, type Tokens } from './account';
 
 export const TAG = '🐙';
 
@@ -66,6 +66,7 @@ export interface Row extends Session {
   said: string[];
   activity?: Activity | null;
   status?: Status | null;
+  tokens?: Tokens;
 }
 
 async function run(cmd: string[], cwd?: string): Promise<string> {
@@ -213,7 +214,7 @@ export function prFor(key: string | null, prs: Pr[], verdict: Verdict | null, br
   return hits.find((p) => p.state === 'OPEN') ?? hits[0] ?? null;
 }
 
-const projects = join(homedir(), '.claude', 'projects');
+const projects = join(claudeDir(), 'projects');
 const transcriptPaths = new Map<string, string | null>();
 
 export function transcriptPath(s: Session): string | null {

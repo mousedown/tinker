@@ -5,8 +5,11 @@ import { crumbs, keyLines, paint, type Hint } from './render/paint';
 import { headerRow, layout, tableRow, type Column } from './render/table';
 import type { Seg } from './render/text';
 import { AMBER, BOLD, BRASS, DIM, GREEN, INK, INK2, MAGENTA, RED, SKY } from './render/theme';
-import { MENU, fit, isLive, needsYou, newest, pendingOf, phaseOf, selected, targets, tidyOf, visible, type State } from './state';
-import { machineStrip } from './strip';
+import { MENU, fit, isLive, needsYou, newest, pendingOf, phaseOf, selected, selectedIssue, shownIssues, targets, tidyOf, visible, type State, type Tracker } from './state';
+import { sessionFor, type Issue } from './issues';
+import { identity, machineStrip, usageStrip } from './strip';
+import { segsWidth } from './render/text';
+import { count, total } from './account';
 import { VERSION } from './version';
 
 export function age(ms: number): string {
@@ -159,22 +162,43 @@ export function versionTag(state: State): Seg[] {
     : [[`v${VERSION}`, DIM]];
 }
 
-function header(state: State, steps: string[]): Seg[][] {
+function header(state: State, steps: string[], sums: Seg[] = summary(state)): Seg[][] {
   const w = state.width;
   const lines: Seg[][] = [];
-  if (state.view === 'list' && state.height >= 28 && w >= LOGO_WIDTH) {
+  if (state.page === 'sessions' && state.view === 'list' && state.height >= 28 && w >= LOGO_WIDTH) {
     lines.push(...logo(w), TAGLINE);
   } else if (w >= MINI_WIDTH + 20) {
     const mini = miniLogo();
     lines.push(mini[0], mini[1]);
   }
-  lines.push([], [...crumbs(steps), ['   ', null], ...summary(state)]);
+  const title: Seg[] = [...crumbs(steps), ['   ', null], ...sums];
+  const who = identity(state.account);
+  const gap = w - 1 - segsWidth(title) - segsWidth(who);
+  lines.push([], gap >= 3 ? [...title, [' '.repeat(gap), null], ...who] : title);
+  if (who.length && gap < 3) lines.push([['  ', null], ...who]);
   lines.push([['  ', null], ...toggles(state), ['   ', null], ...versionTag(state)]);
   if (state.machine) lines.push([['  ', null], ...machineStrip(state.machine)]);
+  const bySession = new Map(state.rows.map((r) => [r.sessionId, r.tokens ? total(r.tokens) : 0] as const));
+  const usage = usageStrip(state.account, [...bySession.values()].reduce((n, t) => n + t, 0), state.now);
+  if (usage.length) lines.push([['  ', null], ...usage]);
+  lines.push([]);
   return lines;
 }
 
+const FIELD_LABEL = { site: 'Jira site', email: 'Email', token: 'API token' } as const;
+
 function footer(state: State, hints: [Hint[], Hint[]]): Seg[][] {
+  if (state.input?.kind === 'jira') {
+    const f = state.input.field;
+    const value = f === 'token' ? '•'.repeat(state.input.token.length) : state.input[f];
+    const help =
+      f === 'site'
+        ? 'your Jira address, e.g. acme.atlassian.net · enter next · esc cancel'
+        : f === 'email'
+          ? 'the email you sign in to Jira with · enter next · esc cancel'
+          : 'paste the token from the page that just opened · enter connect · esc cancel';
+    return [[[`${FIELD_LABEL[f]} › `, SKY], [value, BOLD], ['█', SKY]], [[help, DIM]]];
+  }
   if (state.input?.kind === 'new')
     return [[['New issue › ', SKY], [state.input.text, BOLD], ['█', SKY]], [['ABC-123 · 42 · issue URL · "a description" · --note "…"   enter launch · esc cancel', DIM]]];
   if (state.menu !== null) {
@@ -263,6 +287,12 @@ function detailScreen(state: State, r: Row): string[] {
     field('state', stateCell(r, state)),
     field('session', [[`${r.id}`, INK], ['  ', null], [`claude attach ${r.id}`, DIM]]),
     field('started', [[`${age(state.now - r.startedAt)} ago`, INK]]),
+    field(
+      'tokens',
+      r.tokens && total(r.tokens)
+        ? [[count(total(r.tokens)), INK], [`  ${count(r.tokens.input)} in · ${count(r.tokens.output)} out · cache reads not counted`, DIM]]
+        : [['none yet', DIM]]
+    ),
     field('repo', [[r.cwd.replace(process.env.HOME ?? '~', '~'), INK2]]),
     field('PR', r.pr ? [...prCell(r), ['  ', null], [r.pr.title, INK2]] : [['none yet', DIM]]),
     field(
@@ -289,7 +319,7 @@ function detailScreen(state: State, r: Row): string[] {
 
 export function screen(state: State): string[] {
   const row = selected(state);
-  const lines = state.view === 'detail' && row ? detailScreen(state, row) : listScreen(state);
+  const lines = state.page === 'issues' ? issuesScreen(state) : state.view === 'detail' && row ? detailScreen(state, row) : listScreen(state);
   return fill(lines, state.height);
 }
 
@@ -299,4 +329,79 @@ export function plainTable(state: State, color: boolean): string {
   for (const r of visible(state)) out.push(paint(tableRow(cols, cells(state, r, color)), 120, undefined, color));
   if (out.length === 1) out.push('No Tinker sessions.');
   return out.join('\n') + '\n';
+}
+
+function trackerChip(name: string, t: Tracker, key: string): Seg[] {
+  const label: Seg[] = [[`${name} `, INK2]];
+  switch (t.state) {
+    case 'connected':
+      return [...label, [`● ${name === 'Jira' ? 'connected as ' : ''}${t.who ?? ''}`, GREEN]];
+    case 'rejected':
+      return [...label, [`▲ token rejected — ${key} to reconnect`, RED]];
+    case 'unreachable':
+      return [...label, ['▲ unreachable', AMBER]];
+    case 'loading':
+      return [...label, ['◐ loading', SKY]];
+    default:
+      return [...label, [`○ not connected — ${key} to connect`, DIM]];
+  }
+}
+
+const ISSUE_COLUMNS: Column[] = [
+  { key: 'mark', title: '', width: 1 },
+  { key: 'src', title: 'SRC', width: 3 },
+  { key: 'key', title: 'KEY', width: 10 },
+  { key: 'status', title: 'STATUS', width: 13, drop: 2 },
+  { key: 'title', title: 'TITLE', width: 20, flex: true },
+  { key: 'session', title: 'SESSION', width: 19, drop: 1 },
+];
+
+function issueCells(state: State, i: Issue): Record<string, Seg[]> {
+  const r = sessionFor(i, state.rows);
+  return {
+    mark: state.issues.marks.includes(i.url) ? [['☑', BOLD]] : [['☐', DIM]],
+    src: [[i.source === 'jira' ? 'J' : 'GH', DIM]],
+    key: [[i.key, r && isLive(r) ? INK2 : BOLD, i.url]],
+    status: [[i.status, INK2]],
+    title: [[i.title, INK]],
+    session: r ? stateCell(r, state) : [['—', DIM]],
+  };
+}
+
+export function issuesScreen(state: State): string[] {
+  const w = state.width;
+  const is = state.issues;
+  const shown = shownIssues(state);
+  const sums: Seg[] = [[`${shown.length} issue${shown.length === 1 ? '' : 's'}`, INK2]];
+  if (is.marks.length) sums.push([' · ', DIM], [`☑ ${is.marks.length} ticked`, BOLD]);
+  if (is.filter || is.filtering) sums.push(['   / ', DIM], [is.filter, BOLD], ...(is.filtering ? ([['█', SKY]] as Seg[]) : []));
+  const top = ([
+    ...header(state, ['issues'], sums),
+    [['  ', null], ...trackerChip('Jira', is.jira, 'J'), ['    ', null], ...trackerChip('GitHub', is.github, 'G')],
+    [],
+  ] as Seg[][]).map((l) => paint(l, w));
+  const act: Hint[] = [['enter', 'launch'], ['/', 'filter'], ['o', 'open'], ['r', 'refresh'], ['J', 'connect Jira']];
+  if (is.github.state !== 'connected') act.push(['G', 'connect GitHub']);
+  act.push(['q', 'quit']);
+  const bottom = footer(state, [[['tab', 'sessions'], ['↑↓', 'select'], ['space', 'tick'], ['*', 'all']], act]).map((l) => paint(l, w));
+
+  const cols = layout(ISSUE_COLUMNS, w - 2);
+  const body: string[] = [paint([['  ', null], ...headerRow(cols)], w)];
+  const room = Math.max(1, state.height - top.length - bottom.length - 1);
+  const connected = is.jira.state === 'connected' || is.github.state === 'connected';
+  if (is.loadedAt === null) body.push(paint([['  Loading issues…', DIM]], w));
+  else if (shown.length === 0) {
+    const why = is.filter
+      ? `No issues match "${is.filter}".`
+      : connected
+        ? 'Nothing assigned to you is open.'
+        : 'Connect a tracker: J for Jira, G for GitHub.';
+    body.push(paint([[`  ${why}`, DIM]], w));
+  } else {
+    const sel = selectedIssue(state);
+    const at = Math.max(0, shown.findIndex((i) => i.url === sel?.url));
+    const start = Math.min(Math.max(0, at - Math.floor(room / 2)), Math.max(0, shown.length - room));
+    for (const i of shown.slice(start, start + room)) body.push(paint(tableRow(cols, issueCells(state, i)), w, i.url === sel?.url));
+  }
+  return [...top, ...fill(body, state.height - top.length - bottom.length), ...bottom];
 }

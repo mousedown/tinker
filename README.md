@@ -80,6 +80,24 @@ Add `--dry-run` to see which sessions it would start without starting any. For J
 `ABC-123`, the worker reads the ticket through whatever Jira access your Claude Code already has,
 such as the Atlassian MCP server.
 
+### Picking issues in the TUI
+
+Press `tab` in `tinker tui` for the Issues page: your open Jira and GitHub issues in one list, each
+marked with its session if it has one. `space` ticks, `/` filters, and `enter` launches a worker on
+each ticked issue through `tinker`, so the memory and time budgets still apply. Launching an issue
+that already has a running session asks first.
+
+- **GitHub** uses `gh`. If it isn't signed in, `G` runs `gh auth login --web`.
+- **Jira** uses an API token. `J` opens Atlassian's token page and asks for your site, email and the
+  token, checks them, then keeps them in the macOS Keychain (`tinker-jira`), or in
+  `~/.config/tinker/jira.json` readable only by you elsewhere. `JIRA_BASE_URL`, `JIRA_EMAIL` and
+  `JIRA_API_TOKEN`, when all set, take precedence.
+- The Jira list is `assignee = currentUser() AND statusCategory != Done`, narrowed to
+  `TINKER_KEY_PREFIX`'s project when that is set. Set `"jql"` in `~/.config/tinker/settings.json`
+  to use your own query.
+
+The TUI only reads from Jira. It never comments, edits or transitions a ticket.
+
 ## Good to know
 
 - **Issues should be independent.** Nothing coordinates two sessions that touch the same files.
@@ -157,10 +175,15 @@ Little Tinker has no server and collects nothing. It sends no data anywhere of i
 - **What runs:** the work is done by Claude Code and the GitHub CLI on your machine, signed in as
   you. Claude Code sends your sessions to Anthropic as it always does. `gh` reads your issues and
   pushes branches and draft PRs to your GitHub repositories. For Jira keys, workers read the ticket
-  through whatever Jira access your Claude Code already has.
+  through whatever Jira access your Claude Code already has. The TUI's Issues page reads your
+  assigned Jira issues straight from your Jira site with your API token, and nowhere else.
+- **What it reads:** `claude auth status` for the account it shows, your session transcripts for
+  token counts, and claude-hud's cached plan limits when that status line is installed.
 - **What it stores, locally only:** each session's peak memory use for a week, in
   `~/.cache/tinker/peaks`; the newest version number it has seen and any update you declined, also
-  in `~/.cache/tinker/`; and the TUI toggles in `~/.config/tinker/settings.json`. None of it leaves your machine.
+  in `~/.cache/tinker/`; the TUI toggles in `~/.config/tinker/settings.json`; and, once you connect Jira, your site, email and
+  API token in the macOS Keychain or `~/.config/tinker/jira.json`. None of it leaves your machine
+  except the token, which goes only to your own Jira site.
 - **The update check:** once a day, `tinker` downloads this repository's `package.json` from GitHub
   to compare versions. The request carries nothing about you or your work, and `TINKER_NO_UPDATE_CHECK=1` turns it off.
 
