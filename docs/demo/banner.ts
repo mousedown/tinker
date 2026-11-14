@@ -66,9 +66,33 @@ function wordmark(x0: number): string {
   return out.join('');
 }
 
+// "LITTLE", in a 3×5 pixel face above the wordmark, in the octopus's amber.
+const FONT: Record<string, string[]> = {
+  L: ['#..', '#..', '#..', '#..', '###'],
+  I: ['###', '.#.', '.#.', '.#.', '###'],
+  T: ['###', '.#.', '.#.', '.#.', '.#.'],
+  E: ['###', '#..', '##.', '#..', '###'],
+};
+const SMALL = 6;
+const LITTLE_H = 5 * SMALL;
+const LITTLE_GAP = 10;
+
+function little(x0: number): string {
+  const out: string[] = [];
+  [...'LITTLE'].forEach((ch, i) =>
+    FONT[ch].forEach((line, y) =>
+      [...line].forEach((c, x) => {
+        if (c === '#') out.push(`<rect x="${x0 + (i * 4 + x) * SMALL}" y="${y * SMALL}" width="${SMALL}" height="${SMALL}" fill="${PAL.B}"/>`);
+      })
+    )
+  );
+  return out.join('');
+}
+
 const octoW = OCTOPUS[0].length * PX;
 const width = octoW + GAP + WORD[0].length * PX;
-const height = Math.max(OCTOPUS.length * PX, WORD.length * CELL_H);
+const TOP = LITTLE_H + LITTLE_GAP;
+const height = TOP + Math.max(OCTOPUS.length * PX, WORD.length * CELL_H);
 
 const style = `
   .arms { transform-box: fill-box; transform-origin: 50% 0; animation: sway 1.2s steps(1) infinite; }
@@ -86,5 +110,5 @@ ${body}
 </svg>
 `;
 
-await Bun.write('assets/banner.svg', svg(width, octopus() + wordmark(octoW + GAP), 'Little Tinker'));
+await Bun.write('assets/banner.svg', svg(width, little(octoW + GAP) + `<g transform="translate(0 ${TOP})">${octopus()}${wordmark(octoW + GAP)}</g>`, 'Little Tinker'));
 console.log(`assets/banner.svg ${width}×${height}`);
