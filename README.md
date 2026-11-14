@@ -150,6 +150,20 @@ The TUI toggles are saved in `~/.config/tinker/settings.json`.
 
 </details>
 
+## Privacy
+
+Little Tinker has no server and collects nothing. It sends no data anywhere of its own.
+
+- **What runs:** the work is done by Claude Code and the GitHub CLI on your machine, signed in as
+  you. Claude Code sends your sessions to Anthropic as it always does. `gh` reads your issues and
+  pushes branches and draft PRs to your GitHub repositories. For Jira keys, workers read the ticket
+  through whatever Jira access your Claude Code already has.
+- **What it stores, locally only:** each session's peak memory use for a week, in
+  `~/.cache/tinker/peaks`; the newest version number it has seen and any update you declined, also
+  in `~/.cache/tinker/`; and the TUI toggles in `~/.config/tinker/settings.json`. None of it leaves your machine.
+- **The update check:** once a day, `tinker` downloads this repository's `package.json` from GitHub
+  to compare versions. The request carries nothing about you or your work, and `TINKER_NO_UPDATE_CHECK=1` turns it off.
+
 ## For coding agents
 
 The worker's whole contract is [`agents/tinker.md`](agents/tinker.md), and the `/tinker` skill is
