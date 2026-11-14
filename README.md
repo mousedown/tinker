@@ -1,21 +1,51 @@
-<p align="center"><img src="assets/tinker.png" alt="Little Tinker" width="160"></p>
+<div align="center">
 
-# Little Tinker
+<img src="assets/banner.svg" alt="Little Tinker: a pixel-art octopus beside the word TINKER" width="560">
 
-Point it at a list of tickets and come back to draft PRs that have already been reviewed, each with
-its decisions written down. It's all native Claude Code sessions, so there's nothing new to run or
-trust.
+**Hand it a list of tickets. Come back to reviewed draft PRs.**
+
+[![version](https://img.shields.io/github/package-json/v/mousedown/tinker?color=0EA5E9&label=version)](package.json)
+[![License: MIT](https://img.shields.io/badge/license-MIT-F59E0B)](LICENSE)
+[![Claude Code plugin](https://img.shields.io/badge/Claude_Code-plugin-D97757)](https://docs.claude.com/en/docs/claude-code)
+
+[Install](#install) · [How a session runs](#how-a-session-runs) · [Why Tinker](#why-tinker-and-not-just-claudes-own-orchestration) · [Usage](#usage) · [The TUI](#in-the-tui)
+
+</div>
+
+<p align="center">
+  <img alt="tinker tui: five issues launched from the TUI, each session working, opening a draft PR and watching CI; one parks with a question, the rest turn green, are ticked together and prepared, and one merges" src="assets/tui.gif" width="860">
+</p>
+
+<sub>Every frame is drawn by Tinker's own TUI. The sessions, PRs and machine figures are invented and the keys are pressed by a script: <a href="docs/demo/play.ts">see it</a>.</sub>
 
 ```bash
 /tinker ABC-101 ABC-102 #42 "the export button 500s on empty carts"
 ```
 
-Each issue becomes one `claude --bg --agent tinker:tinker` session that ends at a pushed branch and a
-draft PR, or parks with a question for you.
+Each issue becomes one native Claude Code background session (`claude --bg --agent tinker:tinker`).
+It ends at a pushed branch and a draft PR with its decisions written down, or it parks with one
+question and a recommendation for you. There's nothing new to run or trust: `claude agents` lists
+the sessions and `claude attach` joins one.
 
-![tinker tui: sessions grouped by what needs you, with each one's PR, CI and verdict](assets/tui.png)
+## How a session runs
 
-<sub>`tinker tui`, shown with mock data.</sub>
+```mermaid
+flowchart LR
+  A[Issue] --> B[Triage]
+  B --> C[Fresh worktree]
+  C --> D[Failing test first]
+  D --> E[Smallest fix]
+  E --> F[Lint · typecheck · test]
+  F --> G[Draft PR]
+  G --> H[Self-review<br/>up to 3 rounds]
+  H --> I[Watch CI to green]
+  I --> J([TINKER DONE])
+  B -. money, legal, prod data,<br/>credentials, copy, a fact<br/>only you know .-> K([TINKER PARKED])
+  I -. a gate only a person<br/>can clear .-> K
+```
+
+Every other call the worker makes is recorded under *Decisions* in the PR, so a reviewer can see
+what it chose and why.
 
 ## Why Tinker, and not just Claude's own orchestration?
 
@@ -224,6 +254,14 @@ there also comes back.
 bun install
 bun run typecheck
 bun test
+```
+
+The README's pictures are generated, so they stay in step with the TUI:
+
+```bash
+bun docs/demo/banner.ts     # assets/banner.svg, from the TUI's own pixel grids in tui/brand.ts
+bun docs/demo/play.ts       # the scripted TUI session; watch it in your terminal
+vhs docs/demo/tui.tape      # record it to assets/tui.gif (needs vhs)
 ```
 
 ## License

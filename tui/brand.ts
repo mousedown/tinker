@@ -1,7 +1,7 @@
 import type { Seg } from './render/text';
 import { DIM, bg, fg } from './render/theme';
 
-const PAL: Record<string, string> = {
+export const PAL: Record<string, string> = {
   B: '#F59E0B',
   b: '#B45309',
   H: '#FDE68A',
@@ -9,7 +9,7 @@ const PAL: Record<string, string> = {
   K: '#0B1220',
 };
 
-const OCTOPUS = [
+export const OCTOPUS = [
   '....BBBBBB....',
   '..BBHHBBBBBB..',
   '.BBHBBBBBBBBB.',
@@ -26,7 +26,7 @@ const OCTOPUS = [
 
 const MINI_OCTOPUS = ['.BBBB.', 'BWBBWB', 'BBBBBB', 'B.BB.B'];
 
-const WORD = [
+export const WORD = [
   '████████╗██╗███╗   ██╗██╗  ██╗███████╗██████╗ ',
   '╚══██╔══╝██║████╗  ██║██║ ██╔╝██╔════╝██╔══██╗',
   '   ██║   ██║██╔██╗ ██║█████╔╝ █████╗  ██████╔╝',
