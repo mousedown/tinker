@@ -1,7 +1,7 @@
 {
   "name": "tinker",
   "displayName": "Little Tinker",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Little Tinker fixes issues, one or many: each runs as a native background Claude session that ends at a pushed branch, self-reviewed, and a draft PR.",
   "author": {
     "name": "Chris Anthony"
