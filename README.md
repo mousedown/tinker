@@ -3,7 +3,8 @@
 </p>
 
 <p align="center">
-  <b>Hand Claude Code a list of tickets. Come back to reviewed draft PRs.</b>
+  <b>Hand Claude Code a list of tickets. Come back to reviewed draft PRs.</b><br>
+  <i>Less is more.</i>
 </p>
 
 <p align="center">
