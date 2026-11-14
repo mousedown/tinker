@@ -67,6 +67,21 @@ describe('tinker CLI', () => {
     expect(r.stdout.toString()).not.toContain('launched');
   });
 
+  for (const [arg, why] of [
+    ['logs', "no 'logs' command"],
+    ['993b5c65', 'looks like a session id'],
+    ['fixit', 'quoted description of several words'],
+    ['https://github.com/o/r/pull/3', 'no issue in that link'],
+  ]) {
+    test(`${arg} is refused and nothing launches`, () => {
+      const r = run('ABC-1', arg);
+      expect(r.exitCode).toBe(1);
+      expect(r.stderr.toString()).toContain(`Not an issue: ${arg}`);
+      expect(r.stderr.toString()).toContain(why);
+      expect(r.stdout.toString()).toBe('');
+    });
+  }
+
   test('update is a command, not an issue', () => {
     expect(run('--help').stdout.toString()).toContain('tinker update');
   });
@@ -126,6 +141,28 @@ describe('room to launch', () => {
     expect(launch(low, 'ABC-1')).toEqual(['ABC-1 held']);
     expect(launch(low, '--force', 'ABC-1')).toEqual(['ABC-1 dry-run']);
     expect(launch({ ...low, TINKER_SESSION_MB: '0' }, 'ABC-1')).toEqual(['ABC-1 dry-run']);
+  });
+
+  test('issues normalise: keys upper-cased, tracker links become their key, descriptions pass', () => {
+    const { launch } = machine();
+    expect(
+      launch(
+        { TINKER_SESSION_MB: '0' },
+        'abc-7',
+        'https://acme.atlassian.net/browse/SV-3855',
+        'https://acme.atlassian.net/jira/software/projects/SV/boards/1?selectedIssue=SV-12',
+        '#42',
+        'https://github.com/o/my-app-2/issues/9',
+        'the footer overlaps the nav'
+      )
+    ).toEqual(['ABC-7 dry-run', 'SV-3855 dry-run', 'SV-12 dry-run', 'GH-42 dry-run', 'GH-9 dry-run', 'the footer overlaps the nav dry-run']);
+  });
+
+  test('each worker gets a time budget, unless TINKER_MAX_MINUTES=0', () => {
+    const { full } = machine();
+    expect(full({}, 'ABC-1')[0]).toMatch(/Time budget: 120 minutes, so finish by \d{4}-\d\d-\d\dT\d\d:\d\dZ \(UTC\)/);
+    expect(full({ TINKER_MAX_MINUTES: '30' }, 'ABC-1')[0]).toContain('Time budget: 30 minutes');
+    expect(full({ TINKER_MAX_MINUTES: '0' }, 'ABC-1')[0]).not.toContain('Time budget');
   });
 
   test('a held issue says why', () => {

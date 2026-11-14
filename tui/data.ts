@@ -195,10 +195,16 @@ export async function pulls(cwd: string): Promise<Pr[] | null> {
   }
 }
 
-export function prFor(key: string | null, prs: Pr[], verdict: Verdict | null): Pr | null {
+/** The PR the verdict names, else one on the worker's own branch, else one whose title or branch carries the key. */
+export function prFor(key: string | null, prs: Pr[], verdict: Verdict | null, branch: string | null = null): Pr | null {
   const fromVerdict = verdict && /\/pull\/(\d+)/.exec(verdict.text)?.[1];
   if (fromVerdict) {
     const hit = prs.find((p) => p.number === Number(fromVerdict));
+    if (hit) return hit;
+  }
+  if (branch) {
+    const hits = prs.filter((p) => p.branch === branch);
+    const hit = hits.find((p) => p.state === 'OPEN') ?? hits[0];
     if (hit) return hit;
   }
   if (!key) return null;
@@ -341,15 +347,27 @@ export function statusOf(texts: string[]): Status | null {
   return null;
 }
 
-export function transcript(s: Session): { verdict: Verdict | null; said: string[]; activity: Activity | null; status: Status | null } {
+const DEFAULT_BRANCHES = new Set(['main', 'master', 'develop', 'HEAD']);
+
+/** The branch the worker last worked on: every transcript entry records gitBranch. Null on a default branch. */
+export function branchOf(jsonl: string): string | null {
+  const all = [...jsonl.matchAll(/"gitBranch":"([^"]+)"/g)];
+  const b = all.at(-1)?.[1] ?? null;
+  return b && !DEFAULT_BRANCHES.has(b) ? b : null;
+}
+
+type Read = { verdict: Verdict | null; said: string[]; activity: Activity | null; status: Status | null; branch: string | null };
+
+export function transcript(s: Session): Read {
+  const none: Read = { verdict: null, said: [], activity: null, status: null, branch: null };
   const path = transcriptPath(s);
-  if (!path) return { verdict: null, said: [], activity: null, status: null };
+  if (!path) return none;
   try {
     const jsonl = tail(path);
     const texts = assistantTexts(jsonl);
-    return { verdict: verdictOf(texts), said: texts.slice(-6), activity: activityOf(jsonl), status: statusOf(texts) };
+    return { verdict: verdictOf(texts), said: texts.slice(-6), activity: activityOf(jsonl), status: statusOf(texts), branch: branchOf(jsonl) };
   } catch {
-    return { verdict: null, said: [], activity: null, status: null };
+    return none;
   }
 }
 

@@ -8,6 +8,7 @@ AGENT="${TINKER_AGENT:-tinker:tinker}"
 REVIEW="${TINKER_REVIEW:-}"
 TAG="🐙"
 MAX_SESSIONS="${TINKER_MAX_SESSIONS:-0}"
+MAX_MINUTES="${TINKER_MAX_MINUTES:-120}"
 UPDATE_URL="${TINKER_UPDATE_URL:-https://raw.githubusercontent.com/mousedown/tinker/main/package.json}"
 CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/tinker"
 
@@ -21,8 +22,10 @@ Usage:
   tinker update
   tinker --version
 
-An issue is a tracker key (ABC-123), a GitHub issue number or URL (42, #42, https://…/issues/42),
-or a quoted description. With TINKER_KEY_PREFIX=ABC set, a bare number means ABC-<n> instead.
+An issue is a tracker key (ABC-123) or its link (…/browse/ABC-123), a GitHub issue number or URL
+(42, #42, https://…/issues/42), or a quoted description of several words. Anything else (a bare word,
+a session id) is refused and nothing launches. With TINKER_KEY_PREFIX=ABC set, a bare number means
+ABC-<n> instead.
 Each issue becomes one background session, started in the current repo (or --repo / TINKER_REPO):
 claude --bg --agent tinker:tinker.
 
@@ -34,6 +37,9 @@ used this week (its process and everything it started, 1-8 GB; 2 GB until there'
 sessions keep room to grow to that, and 10% stays free. TINKER_SESSION_MB fixes the budget (0 turns the
 check off) and TINKER_MAX_SESSIONS caps how many run at once. Issues that don't fit are held, not
 launched; --force launches them anyway.
+
+Each worker gets a time budget, 120 minutes by default (TINKER_MAX_MINUTES; 0 turns it off). Past it,
+the worker parks as over-budget instead of carrying on.
 
 On launch, tinker checks once a day for a newer release and offers to update (TINKER_NO_UPDATE_CHECK=1
 turns that off). tinker update updates now.
@@ -47,6 +53,18 @@ sessions() {
   claude agents --json ${1:+--all} 2>/dev/null | jq -c --arg tag "$TAG" '[.[] | select(.kind == "background" and ((.name // "") | startswith($tag)))]'
 }
 
+PR_CELL='first | if . == null then "-\t" else "#\(.number) \(if .state == "MERGED" then "merged" elif .state == "CLOSED" then "closed" elif .isDraft then "draft" else "ready" end)\t\(.url)" end'
+
+# The branch a worker last worked on, from its transcript (every entry records gitBranch). Empty when
+# there's no transcript or the worker never left the default branch.
+branch_of() {
+  local f b
+  f=$(ls -- "${CLAUDE_CONFIG_DIR:-$HOME/.claude}"/projects/*/"$1.jsonl" 2>/dev/null | head -1)
+  [ -n "$f" ] || return 0
+  b=$(tail -c 262144 -- "$f" | grep -oE '"gitBranch":"[^"]+"' | tail -1 | cut -d'"' -f4)
+  case "$b" in ""|main|master|develop|HEAD) ;; *) printf '%s\n' "$b" ;; esac
+}
+
 status() {
   local all="" rows
   [ "${1:-}" = "--all" ] && all=1
@@ -56,10 +74,15 @@ status() {
   jq -r '.[] | [.id, .sessionId, .cwd, .state, (.startedAt|tostring), .name] | @tsv' <<<"$rows" |
     while IFS=$'\t' read -r id sid cwd state started name; do
       key=$(grep -oE '[A-Z][A-Z0-9]+-[0-9]+' <<<"$name" | head -1 || true)
+      branch=$(branch_of "$sid")
       pr="-" url=""
-      if [ -n "$key" ] && [ -d "$cwd" ]; then
-        line=$(cd "$cwd" && gh pr list --state all --search "$key in:title" --json number,isDraft,state,url \
-          --jq 'first | if . == null then "-\t" else "#\(.number) \(if .state == "MERGED" then "merged" elif .state == "CLOSED" then "closed" elif .isDraft then "draft" else "ready" end)\t\(.url)" end' 2>/dev/null || printf -- '-\t')
+      if [ -d "$cwd" ] && { [ -n "$branch" ] || [ -n "$key" ]; }; then
+        line=""
+        [ -n "$branch" ] && line=$(cd "$cwd" && gh pr list --state all --head "$branch" --json number,isDraft,state,url --jq "$PR_CELL" 2>/dev/null || true)
+        if { [ -z "$line" ] || [ "${line%%$'\t'*}" = "-" ]; } && [ -n "$key" ]; then
+          line=$(cd "$cwd" && gh pr list --state all --search "$key in:title" --json number,isDraft,state,url --jq "$PR_CELL" 2>/dev/null || true)
+        fi
+        [ -n "$line" ] || line=$'-\t'
         pr="${line%%$'\t'*}" url="${line#*$'\t'}"
       fi
       mins=$(( ( $(date +%s) - started / 1000 ) / 60 ))
@@ -208,6 +231,44 @@ room() {
   fi
 }
 
+# Prints the issue in its launch form (ABC-123, #42, an issue URL or a description), or explains on
+# stderr why it is not one and fails. Bare words and session ids are refused: `tinker logs` used to
+# start a worker on "logs".
+normalise() {
+  local issue="$1" key
+  if [[ "$issue" =~ ^#?[0-9]+$ ]]; then
+    if [ -n "$PREFIX" ]; then issue="$PREFIX-${issue#\#}"; else issue="#${issue#\#}"; fi
+  fi
+  key=$(tr '[:lower:]' '[:upper:]' <<<"$issue")
+  if [[ "$key" =~ ^[A-Z][A-Z0-9]*-[0-9]+$ ]]; then printf '%s\n' "$key"; return; fi
+  if [[ "$issue" =~ ^#[0-9]+$ ]] || [[ "$issue" =~ ^https?://[^[:space:]]*github\.com/.+/issues/[0-9]+ ]]; then
+    printf '%s\n' "$issue"; return
+  fi
+  # A tracker link (Jira's /browse/ABC-123, ?selectedIssue=ABC-123, Linear's /issue/ABC-123/…) is its key.
+  if [[ "$issue" != *github.com* ]] && [[ "$issue" =~ ^https?://[^[:space:]]*[/=]([A-Za-z][A-Za-z0-9]+-[0-9]+)([/?#&].*)?$ ]]; then
+    tr '[:lower:]' '[:upper:]' <<<"${BASH_REMATCH[1]}"; return
+  fi
+  # A description is a sentence: more than one word.
+  if [[ "$issue" =~ [^[:space:]][[:space:]]+[^[:space:]] ]]; then printf '%s\n' "$issue"; return; fi
+
+  local hint="an issue is a tracker key (ABC-123), #42, an issue URL, or a quoted description of several words"
+  if [[ "$issue" =~ ^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$ ]] || [[ "$issue" =~ ^[0-9a-f]{8}$ ]]; then
+    hint="that looks like a session id; claude attach $issue or claude logs $issue opens it"
+  elif [[ "$issue" =~ ^(logs|attach|stop|rm|agents|ls|list|ps|kill|help|version|install|upgrade)$ ]]; then
+    hint="tinker has no '$issue' command (status, tui, tidy, update); for a session, try claude $issue"
+  elif [[ "$issue" =~ ^https?:// ]]; then
+    hint="no issue in that link; give an issue URL or its key"
+  fi
+  printf 'Not an issue: %s (%s). Nothing launched.\n' "$issue" "$hint" >&2
+  return 1
+}
+
+# An ISO time in UTC, $1 minutes from now.
+utc_after() {
+  local at=$(( $(date +%s) + $1 * 60 ))
+  date -u -r "$at" +%Y-%m-%dT%H:%MZ 2>/dev/null || date -u -d "@$at" +%Y-%m-%dT%H:%MZ
+}
+
 launch() {
   local note="" dry=0 force=0 issues=()
   while [ $# -gt 0 ]; do
@@ -224,6 +285,13 @@ launch() {
   [ ${#issues[@]} -gt 0 ] || { usage; exit 1; }
   [ -d "$REPO" ] || { echo "No repo at $REPO" >&2; exit 1; }
 
+  # Check every issue before launching any, so one typo doesn't leave half a batch running.
+  local bad=0 checked=() issue
+  for raw in "${issues[@]}"; do
+    if issue=$(normalise "$raw"); then checked+=("$issue"); else bad=1; fi
+  done
+  [ "$bad" -eq 0 ] || exit 1
+
   local running live seen=" "
   running=$(sessions | jq -c '[.[] | select(.state != "done")]')
   live=$(jq -r '.[].name' <<<"$running")
@@ -239,16 +307,16 @@ launch() {
     fi
   fi
 
-  for raw in "${issues[@]}"; do
-    issue="$raw"
-    [[ "$issue" =~ ^#?[0-9]+$ ]] && { if [ -n "$PREFIX" ]; then issue="$PREFIX-${issue#\#}"; else issue="#${issue#\#}"; fi; }
-    issue_uc=$(tr '[:lower:]' '[:upper:]' <<<"$issue")
-    [[ "$issue_uc" =~ ^[A-Z][A-Z0-9]+-[0-9]+$ ]] && issue="$issue_uc"
+  local budget_note=""
+  if [ "$MAX_MINUTES" -gt 0 ] 2>/dev/null; then
+    budget_note="Time budget: $MAX_MINUTES minutes, so finish by $(utc_after "$MAX_MINUTES") (UTC). Check date -u at the start of each stage; once past it, park as over-budget with what is left."
+  fi
 
+  for issue in "${checked[@]}"; do
     if [[ "$seen" == *" $issue "* ]]; then continue; fi
     seen+="$issue "
 
-    if [[ "$issue" =~ ^[A-Z][A-Z0-9]+-[0-9]+$ ]]; then
+    if [[ "$issue" =~ ^[A-Z][A-Z0-9]*-[0-9]+$ ]]; then
       label="$issue"
       prompt="Fix $issue."
     elif [[ "$issue" =~ ^#([0-9]+)$ ]]; then
@@ -263,6 +331,7 @@ launch() {
     fi
     [ -n "$note" ] && { [[ "$prompt" == *. ]] || prompt+="."; prompt+=" $note"; }
     [ -n "$REVIEW" ] && { [[ "$prompt" == *. ]] || prompt+="."; prompt+=" Self-review with $REVIEW."; }
+    [ -n "$budget_note" ] && { [[ "$prompt" == *. ]] || prompt+="."; prompt+=" $budget_note"; }
 
     if [ -n "$live" ] && grep -qF -- "$label" <<<"$live"; then
       printf '%s\tskipped\ta live Little Tinker session already has it\n' "$label"; continue

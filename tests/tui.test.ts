@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { assistantTexts, issueKey, labelOf, prFor, verdictOf } from '../tui/data';
+import { assistantTexts, branchOf, issueKey, labelOf, prFor, verdictOf } from '../tui/data';
 import { initialState, reduce, selected, visible, type State } from '../tui/state';
 import { capacity, parsePeaks, parsePs, record, treeMb, type Peaks } from '../tui/capacity';
 import { stripAnsi } from '../tui/render/text';
@@ -43,6 +43,20 @@ describe('data', () => {
     expect(prFor('ABC-1', prs, { kind: 'DONE', text: 'https://github.com/o/r/pull/9 P0=0' })?.number).toBe(9);
     expect(prFor('ABC-1', prs, null)?.number).toBe(6);
     expect(prFor('ABC-2', prs, null)).toBeNull();
+  });
+
+  test('prFor finds a description worker\'s PR by its branch, before any verdict', () => {
+    const prs = [pr({ number: 7, title: 'fix: tidy the footer', branch: 'fix/footer-gap' }), pr({ number: 8, branch: 'fix/abc-1-thing' })];
+    expect(prFor(null, prs, null, 'fix/footer-gap')?.number).toBe(7);
+    expect(prFor(null, prs, null, 'fix/nothing-yet')).toBeNull();
+    expect(prFor('ABC-1', prs, null, 'fix/nothing-yet')?.number).toBe(8);
+  });
+
+  test('branchOf reads the last branch the worker was on, not a default one', () => {
+    const line = (b: string) => JSON.stringify({ type: 'user', gitBranch: b });
+    expect(branchOf([line('main'), line('fix/abc-1-thing')].join('\n'))).toBe('fix/abc-1-thing');
+    expect(branchOf(line('main'))).toBeNull();
+    expect(branchOf('')).toBeNull();
   });
 });
 
