@@ -6,6 +6,7 @@
 import { execFile } from 'child_process';
 import { cpus, freemem, homedir, loadavg, platform, totalmem } from 'os';
 import { promisify } from 'util';
+import { capacity, formatPeaks, loadPeaks, parsePs, record, savePeaks, sessionOverride, type Capacity, type Live } from './capacity';
 
 const run = promisify(execFile);
 const MB = 1_048_576;
@@ -21,6 +22,8 @@ export interface MachineView {
   swapUsedMb: number | null;
   /** Free space where the checkouts live. */
   disk: { freeMb: number; totalMb: number } | null;
+  /** Room for more sessions, from what the running ones use; null when the check is off. */
+  capacity: Capacity | null;
 }
 
 /** Same as Portia's: when a figure turns amber, and when it turns red. */
@@ -116,16 +119,19 @@ export function machineSampler(dir = homedir()) {
   let disk: MachineView['disk'] = null;
   let diskAt = 0;
 
-  return async function sample(): Promise<MachineView> {
+  let saved = '';
+
+  return async function sample(live: Live[] = []): Promise<MachineView> {
     const now = ticks();
     const cpu =
       last && now.total > last.total ? 1 - (now.idle - last.idle) / (now.total - last.total) : null;
     last = now;
 
     const darwin = platform() === 'darwin';
-    const [vm, swap] = await Promise.all([
+    const [vm, swap, ps] = await Promise.all([
       darwin ? text('vm_stat', []) : Promise.resolve(''),
       darwin ? text('sysctl', ['vm.swapusage']) : Promise.resolve(''),
+      text('ps', ['-A', '-o', 'pid=,ppid=,rss=']),
     ]);
     if (Date.now() - diskAt > 10_000) {
       disk = parseDf(await text('df', ['-k', dir]));
@@ -134,6 +140,14 @@ export function machineSampler(dir = homedir()) {
 
     const totalMb = totalmem() / MB;
     const availableMb = Math.min(totalMb, (darwin && parseVmStat(vm)) || freemem() / MB);
+    const nowS = Math.floor(Date.now() / 1000);
+    const peaks = loadPeaks(nowS);
+    const using = record(peaks, live, parsePs(ps), nowS);
+    const next = formatPeaks(peaks);
+    if (next !== saved) {
+      savePeaks(peaks);
+      saved = next;
+    }
     return {
       cpu,
       load1: loadavg()[0],
@@ -141,6 +155,7 @@ export function machineSampler(dir = homedir()) {
       mem: { totalMb, availableMb, usedMb: totalMb - availableMb },
       swapUsedMb: darwin ? parseSwapusage(swap) : null,
       disk,
+      capacity: capacity(availableMb, totalMb, peaks, live, using, sessionOverride()),
     };
   };
 }

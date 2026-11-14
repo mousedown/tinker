@@ -40,6 +40,8 @@ export interface State {
   tidying: string[];
   pending: Record<string, Pending>;
   machine: MachineView | null;
+  /** A newer release than this one, when the launcher has seen one. */
+  update: string | null;
   message: { text: string; tone: Tone } | null;
   loaded: boolean;
   width: number;
@@ -87,6 +89,7 @@ export function initialState(width: number, height: number, settings: Settings =
     tidying: [],
     pending: {},
     machine: null,
+    update: null,
     message: null,
     loaded: false,
     width,

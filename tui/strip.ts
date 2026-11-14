@@ -26,11 +26,13 @@ export function machineStrip(m: MachineView | null): Seg[] {
   const mem = memLevel(m.mem.availableMb, m.mem.totalMb);
   const share = m.mem.usedMb / Math.max(1, m.mem.totalMb);
   const disk = m.disk ? diskLevel(m.disk.freeMb, m.disk.totalMb) : null;
+  const room = m.capacity?.room ?? null;
   return [
     ...meter(share, GAUGE_WIDTH, role(mem)),
     ['  mem ', DIM],
     [flagged(pct(share), mem), role(mem)],
     [` ${size(m.mem.usedMb)}/${size(m.mem.totalMb)}`, role(mem)],
+    ...(room === null ? [] : ([[` · room for ${room} (~${size(m.capacity!.perSessionMb)} each)`, room === 0 ? AMBER : DIM]] as Seg[])),
     ...(m.swapUsedMb ? ([[` · swap ${size(m.swapUsedMb)}`, DIM]] as Seg[]) : []),
     [' · cpu ', DIM],
     [flagged(pct(m.cpu), load), role(load)],

@@ -158,12 +158,28 @@ TINKER_SOURCE="$PWD" ./install.sh
 ## Usage
 
 ```bash
-tinker <issue>... [--note "text"] [--repo PATH] [--dry-run]
+tinker <issue>... [--note "text"] [--repo PATH] [--dry-run] [--force]
 tinker status [--all]
 tinker tui [--plain]
 tinker tidy [--all] [--dry-run]
+tinker update
 tinker --version
 ```
+
+Launches stop when the machine runs out of memory. Tinker measures what each running session actually
+uses: its process plus everything it started, such as builds, test runners and dev servers. It keeps each
+session's peak for a week in `~/.cache/tinker/peaks`. A new session is budgeted the largest recent peak
+(kept between 1 and 8 GB, and 2 GB until there's a reading). Working sessions that sit below that peak
+keep room to grow back to it, and 10% of memory stays free. The TUI samples every couple of seconds, so
+while it's open it catches build spikes that a single launch would miss. Its machine strip shows the result
+as `room for N (~2.9G each)`.
+
+Issues that don't fit are reported as `held` and not launched; run them again later, or pass `--force`.
+`TINKER_SESSION_MB` fixes the budget instead of learning it, and `TINKER_MAX_SESSIONS` caps how many run at
+once.
+
+Once a day, `tinker` checks for a newer release and offers to update at the terminal. It asks once per
+release; `tinker update` updates any time. The TUI shows the version, and the new one when it's out.
 
 ### In the TUI
 
@@ -198,6 +214,9 @@ there also comes back.
 | `TINKER_REVIEW` | Self-review command, e.g. `/my-review --fix` (default: Claude Code's built-in `/code-review --fix`, or whatever the repo's CLAUDE.md names) |
 | `TINKER_AGENT` | Worker agent (default `tinker:tinker`) |
 | `TINKER_LINKS=0` | Turns off clickable PR and CI links for a terminal that prints them raw |
+| `TINKER_SESSION_MB` | Fixed memory budget per session, in place of the learned one (`0` turns the check off) |
+| `TINKER_MAX_SESSIONS` | Most sessions running at once (default: no cap beyond memory) |
+| `TINKER_NO_UPDATE_CHECK=1` | Skips the daily check for a newer release |
 
 ## Development
 

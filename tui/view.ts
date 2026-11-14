@@ -4,9 +4,10 @@ import { markdown } from './markdown';
 import { crumbs, keyLines, paint, type Hint } from './render/paint';
 import { headerRow, layout, tableRow, type Column } from './render/table';
 import type { Seg } from './render/text';
-import { BOLD, BRASS, DIM, GREEN, INK, INK2, MAGENTA, RED, SKY } from './render/theme';
+import { AMBER, BOLD, BRASS, DIM, GREEN, INK, INK2, MAGENTA, RED, SKY } from './render/theme';
 import { MENU, fit, isLive, needsYou, newest, pendingOf, phaseOf, selected, targets, tidyOf, visible, type State } from './state';
 import { machineStrip } from './strip';
+import { VERSION } from './version';
 
 export function age(ms: number): string {
   const mins = Math.max(0, Math.floor(ms / 60000));
@@ -152,6 +153,12 @@ export function toggles(state: State): Seg[] {
   ];
 }
 
+export function versionTag(state: State): Seg[] {
+  return state.update
+    ? [[`v${VERSION}`, DIM], [`  ↑ ${state.update} is out: tinker update`, AMBER]]
+    : [[`v${VERSION}`, DIM]];
+}
+
 function header(state: State, steps: string[]): Seg[][] {
   const w = state.width;
   const lines: Seg[][] = [];
@@ -162,7 +169,7 @@ function header(state: State, steps: string[]): Seg[][] {
     lines.push(mini[0], mini[1]);
   }
   lines.push([], [...crumbs(steps), ['   ', null], ...summary(state)]);
-  lines.push([['  ', null], ...toggles(state)]);
+  lines.push([['  ', null], ...toggles(state), ['   ', null], ...versionTag(state)]);
   if (state.machine) lines.push([['  ', null], ...machineStrip(state.machine)]);
   return lines;
 }

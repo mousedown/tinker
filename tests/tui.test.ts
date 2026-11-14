@@ -1,6 +1,10 @@
 import { describe, expect, test } from 'bun:test';
 import { assistantTexts, issueKey, labelOf, prFor, verdictOf } from '../tui/data';
 import { initialState, reduce, selected, visible, type State } from '../tui/state';
+import { capacity, parsePeaks, parsePs, record, treeMb, type Peaks } from '../tui/capacity';
+import { stripAnsi } from '../tui/render/text';
+import { VERSION, newer } from '../tui/version';
+import { versionTag } from '../tui/view';
 import { NOW, ROWS, pr, row } from './fixtures';
 
 describe('data', () => {
@@ -107,5 +111,49 @@ describe('state', () => {
     const step = reduce(s, { type: 'key', key: { name: 'char', ch: 'o' } });
     expect(step.effects).toEqual([]);
     expect(step.state.message?.text).toContain('No PR');
+  });
+});
+
+describe('version and room', () => {
+  test('newer compares x.y.z numerically', () => {
+    expect(newer('0.10.0', '0.9.9')).toBe(true);
+    expect(newer('0.3.3', '0.3.3')).toBe(false);
+    expect(newer('0.3.2', '0.3.10')).toBe(false);
+    expect(newer('1.0.0-beta', '0.9.0')).toBe(true);
+  });
+
+  test('the header shows the version, and an update when one is out', () => {
+    const base = initialState(140, 40);
+    expect(stripAnsi(versionTag(base).map(([t]) => t).join(''))).toBe(`v${VERSION}`);
+    expect(versionTag({ ...base, update: '9.9.9' }).map(([t]) => t).join('')).toContain('9.9.9 is out: tinker update');
+  });
+
+  test('room is worked out the same way as the launcher works it out', () => {
+    // Same machine and processes as tests/cli.test.ts.
+    const procs = parsePs(['1 0 1000', '100 1 400000', '101 100 2700000', '200 1 300000', '999 1 9000000'].join('\n'));
+    expect(Math.round(treeMb(procs, 100)!)).toBe(3027);
+    expect(treeMb(procs, 4242)).toBeNull();
+
+    const now = 1_000_000;
+    const live = [{ id: 'a', pid: 100, state: 'working' }, { id: 'b', pid: 200, state: 'blocked' }];
+    const fresh: Peaks = new Map();
+    const using = record(fresh, live, procs, now);
+    expect(Math.round(fresh.get('a')!.mb)).toBe(3027);
+    expect(capacity(8192, 16384, fresh, live, using)).toMatchObject({ room: 2, heldBackMb: 0, learned: true });
+
+    const before = parsePeaks(`a ${now - 60} 4096\nold ${now - 8 * 86400} 8000\n`, now);
+    expect([...before.keys()]).toEqual(['a']);
+    const u = record(before, live, procs, now);
+    const c = capacity(8192, 16384, before, live, u)!;
+    expect(c.perSessionMb).toBe(4096);
+    expect(Math.floor(c.heldBackMb)).toBe(1068);
+    expect(c.room).toBe(1);
+  });
+
+  test('no readings means 2 GB; small ones are floored at 1 GB; an override wins, and 0 turns it off', () => {
+    expect(capacity(8192, 16384, new Map(), [], new Map())).toMatchObject({ room: 3, perSessionMb: 2048, learned: false });
+    expect(capacity(8192, 16384, parsePeaks('x 1 300', 1), [], new Map())!.room).toBe(6);
+    expect(capacity(8192, 16384, new Map(), [], new Map(), 4096)!.room).toBe(1);
+    expect(capacity(8192, 16384, new Map(), [], new Map(), 0)).toBeNull();
   });
 });
