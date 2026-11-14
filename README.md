@@ -33,9 +33,8 @@ state of its own.
 - **The same steps every time**: a fresh worktree, a failing test first, the smallest fix, your lint,
   typecheck and tests, a draft PR, up to three rounds of self-review, then a watch on CI until it's
   green. Every call it makes on its own is written under *Decisions* in the PR.
-- **Asks instead of guessing**: it stops only for money, legal text, production data, credentials,
-  customer-facing copy or a fact only you know, and it leaves the question and its recommendation.
-  You answer with `claude attach`.
+- **Asks instead of guessing**: when a call should be yours, it stops with one question and its
+  recommended answer. You reply with `claude attach`.
 - **Safe to leave alone**: workers can't merge, mark a PR ready, force-push, write to your tracker,
   or touch production, secrets or CI settings.
 - **One command for many issues**: Jira keys, GitHub issue numbers, issue URLs or a plain sentence.
