@@ -12,6 +12,8 @@ export interface LoadDeps {
   prefix: string | null;
   /** Local repos to list GitHub issues from. */
   repos: string[];
+  /** Keys the sessions work on, so their tickets can be named even when not in the list. */
+  keys: string[];
 }
 
 const DISCONNECTED: Tracker = { state: 'disconnected', who: null };
@@ -35,16 +37,32 @@ async function github(d: LoadDeps): Promise<{ tracker: Tracker; issues: Issue[] 
   return { tracker: { state: 'connected', who: login }, issues: [...byUrl.values()] };
 }
 
-async function jira(d: LoadDeps): Promise<{ tracker: Tracker; issues: Issue[] }> {
+async function jira(d: LoadDeps): Promise<{ tracker: Tracker; issues: Issue[]; tickets: Issue[]; site?: string }> {
   const creds = await loadCreds(d.run, d.env, d.platform, d.file);
-  if (!creds) return { tracker: DISCONNECTED, issues: [] };
+  if (!creds) return { tracker: DISCONNECTED, issues: [], tickets: [] };
   const [me, found] = await Promise.all([jiraMyself(creds, d.fetch), jiraSearch(creds, jqlFor(d.prefix, d.jql), d.fetch)]);
-  if (!found.ok) return { tracker: { state: found.why === 'rejected' ? 'rejected' : 'unreachable', who: null }, issues: [] };
-  return { tracker: { state: 'connected', who: me.ok ? me.name : creds.email }, issues: found.issues };
+  if (!found.ok) return { tracker: { state: found.why === 'rejected' ? 'rejected' : 'unreachable', who: null }, issues: [], tickets: [], site: creds.site };
+  const listed = new Set(found.issues.map((i) => i.key));
+  const missing = [...new Set(d.keys)].filter((k) => /^[A-Z][A-Z0-9]*-\d+$/.test(k) && !k.startsWith('GH-') && !listed.has(k)).slice(0, 50);
+  const extra = missing.length ? await jiraSearch(creds, `key in (${missing.join(',')})`, d.fetch) : null;
+  return {
+    tracker: { state: 'connected', who: me.ok ? me.name : creds.email },
+    issues: found.issues,
+    tickets: extra?.ok ? extra.issues : [],
+    site: creds.site,
+  };
 }
 
 /** Both trackers at once; one failing never hides the other's issues. */
-export async function loadIssues(d: LoadDeps): Promise<{ list: Issue[]; jira: Tracker; github: Tracker }> {
+export async function loadIssues(
+  d: LoadDeps
+): Promise<{ list: Issue[]; tickets: Issue[]; jira: Tracker; github: Tracker; jiraSite: string | null }> {
   const [j, g] = await Promise.all([jira(d), github(d)]);
-  return { list: [...j.issues, ...g.issues].sort((a, b) => b.updatedAt - a.updatedAt), jira: j.tracker, github: g.tracker };
+  return {
+    list: [...j.issues, ...g.issues].sort((a, b) => b.updatedAt - a.updatedAt),
+    tickets: j.tickets,
+    jira: j.tracker,
+    github: g.tracker,
+    jiraSite: j.site ?? null,
+  };
 }

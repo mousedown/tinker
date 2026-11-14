@@ -189,7 +189,7 @@ describe('CI', () => {
     const s = { ...loaded(), marks: ['f1'] };
     const text = stripAnsi(screen(s).join('\n'));
     expect(text).toContain('■■■■■■ ✕2');
-    expect(text).toContain('D stop at draft ○');
+    expect(text).toContain('D draft ○');
     expect(text).toContain('☑');
   });
 });

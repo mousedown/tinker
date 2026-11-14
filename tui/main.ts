@@ -151,6 +151,7 @@ export async function perform(effect: Extract<Effect, { type: 'resume' | 'cleanu
     case 'cleanup': {
       const common = await capture(['git', 'rev-parse', '--path-format=absolute', '--git-common-dir'], effect.cwd);
       const main = common.ok ? dirname(common.out.trim()) : null;
+      for (const id of effect.stop ?? []) await capture(['claude', 'stop', id]);
       for (const id of effect.ids.filter((x) => x !== effect.id)) await capture(['claude', 'rm', id]);
       const r = await capture(['claude', 'rm', effect.id]);
       if (!r.ok) return { ok: false, text: `${effect.label}: ${firstLine(r.out) || 'claude rm failed'}` };
@@ -282,6 +283,7 @@ async function main(): Promise<void> {
         jql: state.settings.jql,
         prefix: process.env.TINKER_KEY_PREFIX || null,
         repos,
+        keys: state.rows.map((r) => r.key ?? r.label),
       });
       dispatch({ type: 'issues', ...r, now: Date.now() });
     } catch (error) {
@@ -431,12 +433,13 @@ async function main(): Promise<void> {
     dispatch({ type: 'account', account: { account, limits: readLimits() } });
   };
   void who();
+  void loadIssuesNow();
   let polls = 0;
   const timer = setInterval(() => {
     void refresh();
     void measure();
     if (++polls % (LIMITS_MS / POLL_MS) === 0) void who();
-    if (state.page === 'issues' && Date.now() - issuesAt >= ISSUES_MS) void loadIssuesNow();
+    if (Date.now() - issuesAt >= ISSUES_MS) void loadIssuesNow();
   }, POLL_MS);
   const ticker = setInterval(() => {
     state = { ...state, now: Date.now() };

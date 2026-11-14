@@ -29,7 +29,7 @@ function fakeFetch(status = 200) {
   return { fetch, urls };
 }
 
-const deps = (run: Run, fetch: Fetch): LoadDeps => ({ run, fetch, env: {}, platform: 'darwin', file: '/unused', jql: null, prefix: 'SV', repos: ['/r'] });
+const deps = (run: Run, fetch: Fetch): LoadDeps => ({ run, fetch, env: {}, platform: 'darwin', file: '/unused', jql: null, prefix: 'SV', repos: ['/r'], keys: [] });
 
 describe('loadIssues', () => {
   test('both sources load into one list, newest first', async () => {
@@ -39,6 +39,7 @@ describe('loadIssues', () => {
     expect(r.list.map((i) => i.key)).toEqual(['SV-1', 'GH-1']);
     expect(r.jira).toEqual({ state: 'connected', who: 'Chris A' });
     expect(r.github).toEqual({ state: 'connected', who: 'mousedown' });
+    expect(r.jiraSite).toBe('https://x.atlassian.net');
     expect(calls.find((c) => c.cmd[1] === 'issue')?.cwd).toBe('/r');
     expect(urls.some((u) => u.includes(encodeURIComponent('project = SV AND')))).toBe(true);
   });
@@ -54,6 +55,7 @@ describe('loadIssues', () => {
     const r = await loadIssues(deps(fakeRun({ keychain: null }).run, fetch));
     expect(r.jira).toEqual({ state: 'disconnected', who: null });
     expect(urls).toEqual([]);
+    expect(r.jiraSite).toBeNull();
   });
 
   test('gh logged out: GitHub disconnected, and gh issue list never runs', async () => {
@@ -68,5 +70,27 @@ describe('loadIssues', () => {
     const { run } = fakeRun();
     const r = await loadIssues({ ...deps(run, fakeFetch().fetch), repos: ['/r', '/r2'] });
     expect(r.list.filter((i) => i.key === 'GH-1')).toHaveLength(1);
+  });
+
+  test('tickets the sessions work on are looked up too, without joining the Issues list', async () => {
+    const urls: string[] = [];
+    const fetch: Fetch = async (url) => {
+      urls.push(url);
+      if (url.includes('/myself')) return { status: 200, text: async () => JSON.stringify({ displayName: 'Chris A' }) };
+      if (decodeURIComponent(url).includes('key in (SV-2829)'))
+        return { status: 200, text: async () => JSON.stringify({ issues: [{ key: 'SV-2829', fields: { summary: 'Done already', status: { name: 'Done' }, updated: '2026-11-01T00:00:00Z' } }] }) };
+      return { status: 200, text: async () => JSON.stringify(jiraBody) };
+    };
+    const r = await loadIssues({ ...deps(fakeRun().run, fetch), keys: ['SV-1', 'SV-2829', 'GH-4'] });
+    expect(r.list.map((i) => i.key)).toEqual(['SV-1', 'GH-1']);
+    expect(r.tickets.map((i) => [i.key, i.title])).toEqual([['SV-2829', 'Done already']]);
+    expect(urls.filter((u) => decodeURIComponent(u).includes('key in'))).toHaveLength(1);
+  });
+
+  test('no lookup when every session ticket is already listed', async () => {
+    const { fetch, urls } = fakeFetch();
+    const r = await loadIssues({ ...deps(fakeRun().run, fetch), keys: ['SV-1'] });
+    expect(r.tickets).toEqual([]);
+    expect(urls.some((u) => decodeURIComponent(u).includes('key in'))).toBe(false);
   });
 });

@@ -139,7 +139,7 @@ describe('version and room', () => {
   test('the header shows the version, and an update when one is out', () => {
     const base = initialState(140, 40);
     expect(stripAnsi(versionTag(base).map(([t]) => t).join(''))).toBe(`v${VERSION}`);
-    expect(versionTag({ ...base, update: '9.9.9' }).map(([t]) => t).join('')).toContain('9.9.9 is out: tinker update');
+    expect(versionTag({ ...base, update: '9.9.9' }).map(([t]) => t).join('')).toContain('↑ 9.9.9: tinker update');
   });
 
   test('room is worked out the same way as the launcher works it out', () => {

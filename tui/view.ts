@@ -1,14 +1,13 @@
-import { LOGO_WIDTH, MINI_WIDTH, TAGLINE, logo, miniLogo } from './brand';
 import type { Row } from './data';
 import { markdown } from './markdown';
-import { crumbs, keyLines, paint, type Hint } from './render/paint';
+import { keyLines, paint, type Hint } from './render/paint';
 import { headerRow, layout, tableRow, type Column } from './render/table';
 import type { Seg } from './render/text';
-import { AMBER, BOLD, BRASS, DIM, GREEN, INK, INK2, MAGENTA, RED, SKY } from './render/theme';
-import { MENU, fit, isLive, needsYou, newest, pendingOf, phaseOf, selected, selectedIssue, shownIssues, targets, tidyOf, visible, type State, type Tracker } from './state';
+import { AMBER, BLUE, BOLD, BRASS, DIM, GREEN, INK, INK2, MAGENTA, RED, SKY } from './render/theme';
+import { MENU, fit, isLive, landed, needsYou, newest, pendingOf, phaseOf, selected, selectedIssue, shownIssues, targets, ticketOf, tidyOf, visible, type State, type Tracker } from './state';
 import { sessionFor, type Issue } from './issues';
 import { identity, machineStrip, usageStrip } from './strip';
-import { segsWidth } from './render/text';
+import { segsWidth, truncate } from './render/text';
 import { count, total } from './account';
 import { VERSION } from './version';
 
@@ -28,6 +27,7 @@ export function stateCell(r: Row, state: State): Seg[] {
     return [[`${SPIN[Math.floor(now / 500) % SPIN.length]} ${pending.verb}…`, SKY]];
   const phase = phaseOf(r);
   if (r.state === 'working') return [[`${SPIN[Math.floor(now / 500) % SPIN.length]} ${phase === 'fixing-ci' ? 'fixing CI' : 'working'}`, SKY]];
+  if (landed(r)) return [['⌫ merged', MAGENTA]];
   if (phase === 'awaiting-approval') return [['◆ awaiting approval', BRASS]];
   if (phase === 'ci-failing') return [['✕ CI failing', RED]];
   if (phase === 'green') return [['✓ green', GREEN]];
@@ -110,6 +110,7 @@ const COLUMNS: Column[] = [
   { key: 'mark', title: '', width: 1 },
   { key: 'state', title: 'STATE', width: 19 },
   { key: 'issue', title: 'ISSUE', width: 12 },
+  { key: 'title', title: 'TITLE', width: 28, drop: 0 },
   { key: 'pr', title: 'PR', width: 13, drop: 3 },
   { key: 'ci', title: 'CI', width: 10, drop: 1 },
   { key: 'age', title: 'AGE', width: 4, align: 'right', drop: 2 },
@@ -148,41 +149,72 @@ function chip(key: string, label: string, on: boolean): Seg[] {
 export function toggles(state: State): Seg[] {
   const s = state.settings;
   return [
-    ...chip('D', 'stop at draft', s.draft),
-    ['   ', null],
-    ...chip('M', 'auto-merge', s.autoMerge),
-    ['   ', null],
-    ...chip('T', 'auto-tidy', s.autoTidy),
+    ...chip('D', 'draft', s.draft),
+    ['  ', null],
+    ...chip('M', 'merge', s.autoMerge),
+    ['  ', null],
+    ...chip('T', 'tidy', s.autoTidy),
   ];
 }
 
 export function versionTag(state: State): Seg[] {
   return state.update
-    ? [[`v${VERSION}`, DIM], [`  ↑ ${state.update} is out: tinker update`, AMBER]]
+    ? [[`↑ ${state.update}: tinker update`, AMBER], ['  ', null], [`v${VERSION}`, DIM]]
     : [[`v${VERSION}`, DIM]];
 }
 
-function header(state: State, steps: string[], sums: Seg[] = summary(state)): Seg[][] {
+const PAGES = [
+  ['1', 'Sessions', 'sessions'],
+  ['2', 'Issues', 'issues'],
+] as const;
+
+/** `🐙 tinker ── 1 Sessions │ 2 Issues`, the open page bright, then where you are inside it. */
+export function tabs(state: State, inside: string[] = []): Seg[] {
+  const segs: Seg[] = [['🐙 ', null], ['tinker', BLUE], [' ── ', DIM]];
+  PAGES.forEach(([n, label, page], i) => {
+    const open = state.page === page;
+    if (i > 0) segs.push([' │ ', DIM]);
+    segs.push([n, open ? SKY : DIM], [` ${label}`, open ? BOLD : DIM]);
+  });
+  for (const step of inside) segs.push([' › ', DIM], [step, BOLD]);
+  return segs;
+}
+
+/** `│ left ··· right │`, exactly `width` cells; the right side goes first when there's no room. */
+function boxRow(left: Seg[], right: Seg[], width: number): Seg[] {
+  const inner = width - 4;
+  const fits = right.length > 0 && segsWidth(left) + 3 + segsWidth(right) <= inner;
+  const body = truncate(left, inner);
+  const used = segsWidth(body) + (fits ? segsWidth(right) : 0);
+  return [['│ ', DIM], ...body, [' '.repeat(Math.max(0, inner - used)), null], ...(fits ? right : []), [' │', DIM]];
+}
+
+/** The border: `╭─ title ──── tag ─╮`, the tag dropped before the title is cut. */
+function boxEdge(title: Seg[], tag: Seg[], width: number): Seg[] {
+  const room = width - 6;
+  const withTag = segsWidth(title) + 2 + segsWidth(tag) <= room;
+  const t = truncate(title, room);
+  const fill = room - segsWidth(t) - (withTag ? segsWidth(tag) + 2 : 0);
+  return [['╭─ ', DIM], ...t, [` ${'─'.repeat(Math.max(0, fill))}`, DIM], ...(withTag ? ([[' ', null], ...tag] as Seg[]) : []), [' ─╮', DIM]];
+}
+
+/**
+ * The header panel: the tabs and version in its border, then the status with the toggles (the
+ * trackers on Issues), who you are with the plan's usage, and the machine.
+ */
+function header(state: State, steps: string[], sums: Seg[] = summary(state), right: Seg[] = toggles(state)): Seg[][] {
   const w = state.width;
-  const lines: Seg[][] = [];
-  if (state.page === 'sessions' && state.view === 'list' && state.height >= 28 && w >= LOGO_WIDTH) {
-    lines.push(...logo(w), TAGLINE);
-  } else if (w >= MINI_WIDTH + 20) {
-    const mini = miniLogo();
-    lines.push(mini[0], mini[1]);
-  }
-  const title: Seg[] = [...crumbs(steps), ['   ', null], ...sums];
-  const who = identity(state.account);
-  const gap = w - 1 - segsWidth(title) - segsWidth(who);
-  lines.push([], gap >= 3 ? [...title, [' '.repeat(gap), null], ...who] : title);
-  if (who.length && gap < 3) lines.push([['  ', null], ...who]);
-  lines.push([['  ', null], ...toggles(state), ['   ', null], ...versionTag(state)]);
-  if (state.machine) lines.push([['  ', null], ...machineStrip(state.machine)]);
   const bySession = new Map(state.rows.map((r) => [r.sessionId, r.tokens ? total(r.tokens) : 0] as const));
   const usage = usageStrip(state.account, [...bySession.values()].reduce((n, t) => n + t, 0), state.now);
-  if (usage.length) lines.push([['  ', null], ...usage]);
-  lines.push([]);
-  return lines;
+  const machine: Seg[] = state.machine ? machineStrip(state.machine) : [['measuring the machine…', DIM]];
+  return [
+    boxEdge(tabs(state, steps), versionTag(state), w),
+    boxRow(sums, right, w),
+    boxRow(identity(state.account), usage, w),
+    boxRow(machine, [], w),
+    [['╰', DIM], ['─'.repeat(Math.max(0, w - 2)), DIM], ['╯', DIM]],
+    [],
+  ];
 }
 
 const FIELD_LABEL = { site: 'Jira site', email: 'Email', token: 'API token' } as const;
@@ -238,7 +270,8 @@ function cells(state: State, r: Row, color: boolean): Record<string, Seg[]> {
   return {
     mark: state.marks.includes(r.id) ? [['☑', BOLD]] : [[' ', null]],
     state: stateCell(r, state),
-    issue: [[r.key ?? r.label, color && isLive(r) ? BOLD : color ? INK : null]],
+    issue: [[r.key ?? r.label, color && isLive(r) ? BOLD : color ? INK : null, ticketOf(r, state.issues).url ?? undefined]],
+    title: [[ticketOf(r, state.issues).title ?? '', INK2]],
     pr: prCell(r),
     ci: ciCell(r),
     age: [[age(state.now - r.startedAt), DIM]],
@@ -248,14 +281,15 @@ function cells(state: State, r: Row, color: boolean): Record<string, Seg[]> {
 
 function listScreen(state: State): string[] {
   const w = state.width;
-  const top = header(state, ['sessions']).map((l) => paint(l, w));
+  const top = header(state, []).map((l) => paint(l, w));
   const bottom = footer(state, [
-    [['↑↓', 'select'], ['space', 'tick'], ['*', 'tick group'], ['t', 'tick tidy'], ['enter', 'open']],
+    [['2', 'issues'], ['↑↓', 'select'], ['space', 'tick'], ['*', 'tick group'], ['t', 'tick tidy'], ['enter', 'open']],
     [['m', 'menu'], ['p', 'prepare'], ['c', 'clean up'], ['a', 'attach'], ['o', 'PR'], ['i', 'CI'], ['n', 'new'], ['x', 'stop'], ['f', state.filter === 'active' ? 'all' : 'active'], ['q', 'quit']],
   ]).map((l) => paint(l, w));
 
-  const cols = layout(COLUMNS, w - 2);
   const rows = visible(state);
+  const titled = rows.some((r) => ticketOf(r, state.issues).title);
+  const cols = layout(COLUMNS.filter((c) => c.key !== 'title' || titled), w - 2);
   const body: string[] = [paint([['  ', null], ...headerRow(cols)], w)];
   const room = Math.max(1, state.height - top.length - bottom.length - 2);
 
@@ -275,7 +309,7 @@ function listScreen(state: State): string[] {
 
 function detailScreen(state: State, r: Row): string[] {
   const w = state.width;
-  const top = header(state, ['sessions', r.key ?? r.label]).map((l) => paint(l, w));
+  const top = header(state, [r.key ?? r.label]).map((l) => paint(l, w));
   const bottom = footer(state, [
     [['esc', 'back'], ['↑↓', 'prev/next']],
     [['enter', 'attach'], ['m', 'menu'], ['p', 'prepare'], ['o', 'PR'], ['i', 'CI'], ['x', 'stop'], ['q', 'quit']],
@@ -285,6 +319,10 @@ function detailScreen(state: State, r: Row): string[] {
   const ci = r.pr?.checks;
   const body: string[] = [
     field('state', stateCell(r, state)),
+    field('issue', (() => {
+      const t = ticketOf(r, state.issues);
+      return [[r.key ?? r.label, INK, t.url ?? undefined], ...(t.title ? ([['  ', null], [t.title, INK2]] as Seg[]) : [])] as Seg[];
+    })()),
     field('session', [[`${r.id}`, INK], ['  ', null], [`claude attach ${r.id}`, DIM]]),
     field('started', [[`${age(state.now - r.startedAt)} ago`, INK]]),
     field(
@@ -324,7 +362,7 @@ export function screen(state: State): string[] {
 }
 
 export function plainTable(state: State, color: boolean): string {
-  const cols = layout(COLUMNS.filter((c) => c.key !== 'mark'), 120);
+  const cols = layout(COLUMNS.filter((c) => c.key !== 'mark' && c.key !== 'title'), 120);
   const out = [paint(headerRow(cols), 120, undefined, color)];
   for (const r of visible(state)) out.push(paint(tableRow(cols, cells(state, r, color)), 120, undefined, color));
   if (out.length === 1) out.push('No Tinker sessions.');
@@ -351,9 +389,11 @@ const ISSUE_COLUMNS: Column[] = [
   { key: 'mark', title: '', width: 1 },
   { key: 'src', title: 'SRC', width: 3 },
   { key: 'key', title: 'KEY', width: 10 },
-  { key: 'status', title: 'STATUS', width: 13, drop: 2 },
+  { key: 'status', title: 'STATUS', width: 13, drop: 0 },
   { key: 'title', title: 'TITLE', width: 20, flex: true },
-  { key: 'session', title: 'SESSION', width: 19, drop: 1 },
+  { key: 'session', title: 'SESSION', width: 19, drop: 3 },
+  { key: 'pr', title: 'PR', width: 13, drop: 2 },
+  { key: 'ci', title: 'CI', width: 10, drop: 1 },
 ];
 
 function issueCells(state: State, i: Issue): Record<string, Seg[]> {
@@ -365,6 +405,8 @@ function issueCells(state: State, i: Issue): Record<string, Seg[]> {
     status: [[i.status, INK2]],
     title: [[i.title, INK]],
     session: r ? stateCell(r, state) : [['—', DIM]],
+    pr: r ? prCell(r) : [['—', DIM]],
+    ci: r ? ciCell(r) : [['—', DIM]],
   };
 }
 
@@ -375,15 +417,12 @@ export function issuesScreen(state: State): string[] {
   const sums: Seg[] = [[`${shown.length} issue${shown.length === 1 ? '' : 's'}`, INK2]];
   if (is.marks.length) sums.push([' · ', DIM], [`☑ ${is.marks.length} ticked`, BOLD]);
   if (is.filter || is.filtering) sums.push(['   / ', DIM], [is.filter, BOLD], ...(is.filtering ? ([['█', SKY]] as Seg[]) : []));
-  const top = ([
-    ...header(state, ['issues'], sums),
-    [['  ', null], ...trackerChip('Jira', is.jira, 'J'), ['    ', null], ...trackerChip('GitHub', is.github, 'G')],
-    [],
-  ] as Seg[][]).map((l) => paint(l, w));
+  const trackers: Seg[] = [...trackerChip('Jira', is.jira, 'J'), ['   ', null], ...trackerChip('GitHub', is.github, 'G')];
+  const top = header(state, [], sums, trackers).map((l) => paint(l, w));
   const act: Hint[] = [['enter', 'launch'], ['/', 'filter'], ['o', 'open'], ['r', 'refresh'], ['J', 'connect Jira']];
   if (is.github.state !== 'connected') act.push(['G', 'connect GitHub']);
   act.push(['q', 'quit']);
-  const bottom = footer(state, [[['tab', 'sessions'], ['↑↓', 'select'], ['space', 'tick'], ['*', 'all']], act]).map((l) => paint(l, w));
+  const bottom = footer(state, [[['1', 'sessions'], ['↑↓', 'select'], ['space', 'tick'], ['*', 'all']], act]).map((l) => paint(l, w));
 
   const cols = layout(ISSUE_COLUMNS, w - 2);
   const body: string[] = [paint([['  ', null], ...headerRow(cols)], w)];

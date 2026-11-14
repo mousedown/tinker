@@ -21,7 +21,7 @@ const typed = (s: State, chars: string) => chars.split('').reduce((st, c) => red
 describe('issues view', () => {
   test('lists both sources with the trackers and each issue\'s session', () => {
     const t = text(page([sv1, gh42], on('Chris A'), on('mousedown')));
-    expect(t).toContain('tinker › issues');
+    expect(t).toContain('1 Sessions │ 2 Issues');
     expect(t).toContain('Jira ● connected as Chris A');
     expect(t).toContain('GitHub ● mousedown');
     expect(t).toContain('SV-1');

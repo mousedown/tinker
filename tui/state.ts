@@ -35,6 +35,10 @@ export interface IssuesState {
   filtering: boolean;
   jira: Tracker;
   github: Tracker;
+  /** The connected Jira site, so a key with no listed issue still links to its ticket. */
+  jiraSite: string | null;
+  /** Tickets the sessions work on that the list doesn't hold (done, or someone else's). */
+  tickets: Issue[];
   loadedAt: number | null;
 }
 
@@ -80,7 +84,7 @@ export type Msg =
   | { type: 'resize'; width: number; height: number }
   | { type: 'machine'; machine: MachineView; now?: number }
   | { type: 'account'; account: AccountView }
-  | { type: 'issues'; list: Issue[]; jira: Tracker; github: Tracker; now: number }
+  | { type: 'issues'; list: Issue[]; tickets?: Issue[]; jira: Tracker; github: Tracker; jiraSite?: string | null; now: number }
   | { type: 'done'; label: string }
   | { type: 'message'; text: string; tone: Tone; /** Shown only while this page is open. */ page?: Page };
 
@@ -89,7 +93,7 @@ export type Effect =
   | { type: 'stop'; id: string }
   | { type: 'launch'; args: string }
   | { type: 'resume'; id: string; sessionId: string; cwd: string; name: string; label: string; prompt: string; stopFirst: boolean }
-  | { type: 'cleanup'; id: string; ids: string[]; cwd: string; label: string; branch: string | null }
+  | { type: 'cleanup'; id: string; ids: string[]; /** Sessions waiting at a prompt, stopped before removal. */ stop?: string[]; cwd: string; label: string; branch: string | null }
   | { type: 'automerge'; cwd: string; label: string; number: number; on: boolean }
   | { type: 'ready'; cwd: string; label: string; number: number; undo: boolean }
   | { type: 'settings'; settings: Settings }
@@ -121,6 +125,8 @@ export function initialState(width: number, height: number, settings: Settings =
       filtering: false,
       jira: { state: 'loading', who: null },
       github: { state: 'loading', who: null },
+      jiraSite: null,
+      tickets: [],
       loadedAt: null,
     },
     input: null,
@@ -160,7 +166,13 @@ export function phaseOf(r: Row): Phase | null {
   return fail > 0 && gate >= fail ? 'awaiting-approval' : 'ci-failing';
 }
 
+/** The PR merged and the worker isn't busy: whatever it is waiting on no longer matters. */
+export function landed(r: Row): boolean {
+  return r.pr?.state === 'MERGED' && r.state !== 'working';
+}
+
 export function needsYou(r: Row): boolean {
+  if (landed(r)) return false;
   const phase = phaseOf(r);
   if (phase === 'awaiting-approval' || phase === 'blocked') return true;
   if (phase) return false;
@@ -178,6 +190,7 @@ export function isLive(r: Row): boolean {
 }
 
 export function tidyOf(r: Row, now: number): Tidy | null {
+  if (landed(r)) return 'merged';
   if (isLive(r)) return null;
   if (r.pr?.state === 'MERGED') return 'merged';
   if (r.pr?.state === 'CLOSED') return 'closed';
@@ -378,7 +391,7 @@ export const COMMANDS: Record<string, CommandSpec> = {
     plan: (r, s) => {
       const tidy = tidyOf(r, s.now);
       if (!tidy) return { ok: false, why: isLive(r) ? 'still running' : r.pr ? 'PR still open' : 'not stale yet' };
-      if (s.rows.some((x) => labelOf(x) === labelOf(r) && isLive(x))) return { ok: false, why: 'another session for it is running' };
+      if (s.rows.some((x) => labelOf(x) === labelOf(r) && isLive(x) && !landed(x))) return { ok: false, why: 'another session for it is running' };
       return { ok: true, effect: cleanupEffect(s, r, tidy) };
     },
   },
@@ -394,7 +407,17 @@ export const COMMANDS: Record<string, CommandSpec> = {
 };
 
 function cleanupEffect(s: State, r: Row, tidy: Tidy): Effect {
-  return { type: 'cleanup', id: r.id, ids: siblings(s.rows, r), cwd: r.cwd, label: labelOf(r), branch: tidy === 'merged' ? r.pr!.branch : null };
+  const ids = siblings(s.rows, r);
+  const stop = ids.filter((id) => s.rows.find((x) => x.id === id)?.state === 'blocked');
+  return {
+    type: 'cleanup',
+    id: r.id,
+    ids,
+    ...(stop.length ? { stop } : {}),
+    cwd: r.cwd,
+    label: labelOf(r),
+    branch: tidy === 'merged' ? r.pr!.branch : null,
+  };
 }
 
 function automergeSpec(on: boolean): CommandSpec {
@@ -457,7 +480,7 @@ export function autoTidy(state: State): Step {
   const pending = { ...state.pending };
   for (const r of newest(state.rows).values()) {
     if (tidying.includes(r.id) || tidyOf(r, state.now) !== 'merged') continue;
-    if (state.rows.some((x) => labelOf(x) === labelOf(r) && isLive(x))) continue;
+    if (state.rows.some((x) => labelOf(x) === labelOf(r) && isLive(x) && !landed(x))) continue;
     tidying.push(r.id);
     pending[labelOf(r)] = { verb: 'tidying', since: state.now, waitFor: 'done' };
     effects.push(cleanupEffect(state, r, 'merged'));
@@ -568,7 +591,8 @@ function reduceKey(state: State, key: Key): Step {
   if (key.name === 'pagedown') return { state: move(fresh, 10), effects: [] };
   if (key.name === 'home') return { state: move(fresh, 'home'), effects: [] };
   if (key.name === 'end') return { state: move(fresh, 'end'), effects: [] };
-  if (key.name === 'tab') return { state: { ...fresh, page: 'issues' }, effects: [{ type: 'load-issues' }] };
+  if (key.name === 'tab' || ch === '2') return { state: { ...fresh, page: 'issues', view: 'list' }, effects: [{ type: 'load-issues' }] };
+  if (ch === '1') return { state: { ...fresh, view: 'list' }, effects: [] };
   if (ch === 'f')
     return { state: { ...fresh, filter: state.filter === 'active' ? 'all' : 'active' }, effects: [] };
   if (ch === 'n') return { state: { ...fresh, input: { kind: 'new', text: '' } }, effects: [] };
@@ -661,6 +685,8 @@ export function reduce(state: State, msg: Msg): Step {
         list: msg.list,
         jira: msg.jira,
         github: msg.github,
+        jiraSite: msg.jiraSite ?? state.issues.jiraSite,
+        tickets: msg.tickets ?? state.issues.tickets,
         loadedAt: msg.now,
         marks: state.issues.marks.filter((k) => keys.has(k)),
         selKey: state.issues.selKey && keys.has(state.issues.selKey) ? state.issues.selKey : null,
@@ -737,7 +763,8 @@ function reduceIssuesKey(state: State, key: Key): Step {
   }
 
   if (key.name === 'ctrl-c' || ch === 'q') return { state, effects: [{ type: 'quit' }] };
-  if (key.name === 'tab' || key.name === 'esc') return { state: { ...fresh, page: 'sessions' }, effects: [] };
+  if (key.name === 'tab' || key.name === 'esc' || ch === '1') return { state: { ...fresh, page: 'sessions' }, effects: [] };
+  if (ch === '2') return { state: fresh, effects: [] };
   if (key.name === 'up' || key.name === 'wheel-up' || ch === 'k') return { state: moveIssue(fresh, -1), effects: [] };
   if (key.name === 'down' || key.name === 'wheel-down' || ch === 'j') return { state: moveIssue(fresh, 1), effects: [] };
   if (key.name === 'pageup') return { state: moveIssue(fresh, -10), effects: [] };
@@ -765,4 +792,13 @@ function reduceIssuesKey(state: State, key: Key): Step {
   }
   if (ch === 'o') return { state: fresh, effects: [{ type: 'open', url: sel.url }] };
   return { state: fresh, effects: [] };
+}
+
+/** The ticket a session works on: its listed issue, else a Jira key linked on the connected site. */
+export function ticketOf(r: Row, issues: IssuesState): { url: string | null; title: string | null } {
+  const key = r.key ?? r.label;
+  const hit = issues.list.find((i) => i.key === key) ?? issues.tickets.find((i) => i.key === key);
+  if (hit) return { url: hit.url, title: hit.title };
+  if (r.key && !key.startsWith('GH-') && issues.jiraSite) return { url: `${issues.jiraSite}/browse/${key}`, title: null };
+  return { url: null, title: null };
 }
