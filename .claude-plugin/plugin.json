@@ -1,8 +1,11 @@
 {
   "name": "tinker",
+  "displayName": "Little Tinker",
   "version": "0.4.0",
   "description": "Little Tinker fixes issues, one or many: each runs as a native background Claude session that ends at a pushed branch, self-reviewed, and a draft PR.",
   "author": { "name": "Chris Anthony" },
+  "homepage": "https://github.com/mousedown/tinker",
   "repository": "https://github.com/mousedown/tinker",
+  "icon": ".claude-plugin/icon.png",
   "license": "MIT"
 }

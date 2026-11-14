@@ -1,5 +1,14 @@
 {
   "name": "tinker",
-  "owner": { "name": "Chris Anthony" },
-  "plugins": [{ "name": "tinker", "source": "./", "description": "Fix issues individually or in bulk as native background sessions." }]
+  "owner": {
+    "name": "Chris Anthony"
+  },
+  "description": "Little Tinker: hand Claude Code a list of tickets, come back to reviewed draft PRs.",
+  "plugins": [
+    {
+      "name": "tinker",
+      "source": "./",
+      "description": "Fix issues individually or in bulk as native background sessions."
+    }
+  ]
 }
