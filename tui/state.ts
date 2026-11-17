@@ -558,7 +558,7 @@ function reduceInput(state: State, key: Key): Step {
   if (key.name === 'enter') {
     const args = input.text.trim();
     if (!args) return { state: { ...state, input: null }, effects: [] };
-    return { state: say({ ...state, input: null }, `Launching ${args}…`), effects: [{ type: 'launch', args }] };
+    return { state: say({ ...state, input: null, page: 'sessions' }, `Launching ${args}…`), effects: [{ type: 'launch', args }] };
   }
   if (key.name === 'backspace') {
     return { state: { ...state, input: { ...input, text: input.text.slice(0, -1) } }, effects: [] };
@@ -771,6 +771,7 @@ function reduceIssuesKey(state: State, key: Key): Step {
   if (key.name === 'pagedown') return { state: moveIssue(fresh, 10), effects: [] };
   if (ch === '/') return { state: withIssues(fresh, { filtering: true }), effects: [] };
   if (ch === 'r') return { state: say(fresh, 'Refreshing issues…'), effects: [{ type: 'load-issues' }] };
+  if (ch === 'n') return { state: { ...fresh, input: { kind: 'new', text: '' } }, effects: [] };
   if (ch === 'J')
     return { state: { ...fresh, input: { kind: 'jira', field: 'site', site: '', email: '', token: '' } }, effects: [{ type: 'open', url: TOKEN_PAGE }] };
   if (ch === 'G') {

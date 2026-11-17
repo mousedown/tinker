@@ -85,7 +85,8 @@ such as the Atlassian MCP server.
 Press `tab` in `tinker tui` for the Issues page: your open Jira and GitHub issues in one list, each
 marked with its session if it has one. `space` ticks, `/` filters, and `enter` launches a worker on
 each ticked issue through `tinker`, so the memory and time budgets still apply. Launching an issue
-that already has a running session asks first.
+that already has a running session asks first. `n` launches one that isn't in the list: type a key,
+an issue URL or a description, as on the Sessions page.
 
 - **GitHub** uses `gh`. If it isn't signed in, `G` runs `gh auth login --web`.
 - **Jira** uses an API token. `J` opens Atlassian's token page and asks for your site, email and the
@@ -95,6 +96,9 @@ that already has a running session asks first.
 - The Jira list is `assignee = currentUser() AND statusCategory != Done`, narrowed to
   `TINKER_KEY_PREFIX`'s project when that is set. Set `"jql"` in `~/.config/tinker/settings.json`
   to use your own query.
+- Set `"issueFields"` in the same file to show more Jira fields as columns after STATUS, by name or
+  id: `"issueFields": ["Launch Priority", "customfield_10042"]`. Names match ignoring case, an
+  unknown one shows `—`, and `/` filters on their values too.
 
 The TUI only reads from Jira. It never comments, edits or transitions a ticket.
 

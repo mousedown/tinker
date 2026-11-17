@@ -284,6 +284,7 @@ async function main(): Promise<void> {
         prefix: process.env.TINKER_KEY_PREFIX || null,
         repos,
         keys: state.rows.map((r) => r.key ?? r.label),
+        fields: state.settings.issueFields,
       });
       dispatch({ type: 'issues', ...r, now: Date.now() });
     } catch (error) {

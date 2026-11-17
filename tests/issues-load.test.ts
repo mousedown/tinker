@@ -93,4 +93,27 @@ describe('loadIssues', () => {
     expect(r.tickets).toEqual([]);
     expect(urls.some((u) => decodeURIComponent(u).includes('key in'))).toBe(false);
   });
+
+  test('configured fields resolve by name and are asked for in the search', async () => {
+    const urls: string[] = [];
+    const fetch: Fetch = async (url) => {
+      urls.push(url);
+      const body = url.includes('/myself')
+        ? { displayName: 'Chris A' }
+        : url.includes('/field')
+          ? [{ id: 'customfield_9', name: 'Launch Priority' }]
+          : { issues: [{ key: 'SV-1', fields: { summary: 'x', customfield_9: { value: 'P2' } } }] };
+      return { status: 200, text: async () => JSON.stringify(body) };
+    };
+    const r = await loadIssues({ ...deps(fakeRun().run, fetch), fields: ['Launch Priority'] });
+    expect(r.list.find((i) => i.key === 'SV-1')?.extra).toEqual({ 'Launch Priority': 'P2' });
+    expect(urls.some((u) => u.includes('/search/jql') && u.includes('customfield_9'))).toBe(true);
+  });
+
+  test('no configured fields, no field lookup', async () => {
+    const { fetch, urls } = fakeFetch();
+    await loadIssues(deps(fakeRun().run, fetch));
+    expect(urls.some((u) => u.endsWith('/field'))).toBe(false);
+  });
 });
+
