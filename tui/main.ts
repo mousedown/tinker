@@ -22,7 +22,8 @@ import { launchDir } from './issues';
 import { loadIssues } from './load-issues';
 import { machineSampler } from './machine';
 import { decode } from './runtime/keys';
-import { openUrl, restoreOnExit, terminal } from './runtime/tty';
+import { clicksLinks, openUrl, restoreOnExit, terminal } from './runtime/tty';
+import { linkAt } from './render/paint';
 import { diffFrame } from './runtime/writer';
 import { stripAnsi } from './render/text';
 import { useColor } from './render/theme';
@@ -230,7 +231,7 @@ async function main(): Promise<void> {
     return;
   }
 
-  const term = terminal(process.stdin, process.stdout);
+  const term = terminal(process.stdin, process.stdout, clicksLinks());
   let state: State = { ...initialState(width(), height(), loadSettings()), update: availableUpdate() };
   const sample = machineSampler();
   let prev: string[] | null = null;
@@ -411,7 +412,14 @@ async function main(): Promise<void> {
 
   const onData = (chunk: Buffer | string) => {
     if (paused) return;
-    for (const key of decode(chunk.toString())) dispatch({ type: 'key', key });
+    for (const key of decode(chunk.toString())) {
+      if (key.name === 'click') {
+        const url = linkAt(prev, key.x ?? 0, key.y ?? 0);
+        if (url) openUrl(url);
+        continue;
+      }
+      dispatch({ type: 'key', key });
+    }
   };
   const onResize = () => {
     prev = null;

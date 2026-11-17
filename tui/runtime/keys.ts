@@ -19,12 +19,16 @@ export type KeyName =
   | 'ctrl-c'
   | 'wheel-up'
   | 'wheel-down'
+  | 'click'
   | 'char';
 
 export interface Key {
   name: KeyName;
   /** The character, for `char`. */
   ch?: string;
+  /** The 1-based column and row, for `click`. */
+  x?: number;
+  y?: number;
 }
 
 const CSI: Record<string, KeyName> = {
@@ -66,6 +70,8 @@ export function decode(raw: string): Key[] {
       const button = Number(mouse[1]);
       if (mouse[4] === 'M' && button === 64) keys.push({ name: 'wheel-up' });
       if (mouse[4] === 'M' && button === 65) keys.push({ name: 'wheel-down' });
+      // A left press, with or without shift, alt or ctrl (4, 8, 16): cmd never reaches the app.
+      if (mouse[4] === 'M' && (button & ~28) === 0) keys.push({ name: 'click', x: Number(mouse[2]), y: Number(mouse[3]) });
       i += mouse[0].length;
       continue;
     }

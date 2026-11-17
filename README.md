@@ -166,6 +166,7 @@ row. Actions resume the worker in the background with its context kept.
 | `TINKER_SESSION_MB` | Fixed memory budget per session instead of the learned one (`0` turns the check off) |
 | `TINKER_MAX_SESSIONS` | Most sessions running at once |
 | `TINKER_LINKS=0` | Turns off clickable links for a terminal that prints them raw |
+| `TINKER_CLICK` | `1` makes the TUI open a link you click itself, `0` leaves clicks to the terminal. On by default in Apple Terminal, which can't follow the TUI's links; hold option there to select text |
 | `TINKER_NO_UPDATE_CHECK=1` | Skips the daily update check |
 
 The memory budget is learned: each session is measured with everything it started, and a new one is
