@@ -89,3 +89,24 @@ describe('n on the Issues page', () => {
     expect(step.state.page).toBe('sessions');
   });
 });
+
+describe('m on the Issues page', () => {
+  test('opens a menu that starts tinker on the selected issue', () => {
+    const s = typed(page([sv1], on('Chris A'), off), 'm');
+    expect(s.menu).toBe(0);
+    const t = text(s);
+    expect(t).toContain('Start tinker on SV-1');
+    expect(t).toContain('Start tinker on another issue…');
+    const step = reduce(s, { type: 'key', key: { name: 'enter' } });
+    expect(step.effects).toEqual([{ type: 'launch-batch', batches: ['SV-1'] }]);
+    expect(step.state.page).toBe('sessions');
+    expect(step.state.menu).toBeNull();
+  });
+
+  test('its letters run items, and esc closes it', () => {
+    const s = typed(page([sv1], on('Chris A'), off), 'm');
+    expect(typed(s, 'n').input).toEqual({ kind: 'new', text: '' });
+    expect(reduce(s, { type: 'key', key: { name: 'esc' } }).state.menu).toBeNull();
+    expect(reduce(s, { type: 'key', key: { name: 'char', ch: 'o' } }).effects).toEqual([{ type: 'open', url: 'u1' }]);
+  });
+});

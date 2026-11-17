@@ -5,7 +5,7 @@ import { keyLines, paint, type Hint } from './render/paint';
 import { fit as fitCells, headerRow, layout, tableRow, type Column } from './render/table';
 import type { Seg } from './render/text';
 import { AMBER, BLUE, BOLD, BRASS, DIM, GREEN, INK, INK2, MAGENTA, RED, SKY } from './render/theme';
-import { MENU, fit, isLive, landed, needsYou, newest, pendingOf, phaseOf, selected, selectedIssue, shownIssues, targets, ticketOf, tidyOf, visible, type State, type Tracker } from './state';
+import { ISSUE_MENU, MENU, fit, isLive, landed, needsYou, newest, pendingOf, phaseOf, selected, selectedIssue, shownIssues, targets, ticketOf, tidyOf, visible, type State, type Tracker } from './state';
 import { sessionFor, type Issue } from './issues';
 import { identity, machineStrip, usageStrip } from './strip';
 import { segsWidth, truncate } from './render/text';
@@ -254,6 +254,16 @@ function footer(state: State, hints: [Hint[], Hint[]]): Seg[][] {
   }
   if (state.input?.kind === 'new')
     return [[['New issue › ', SKY], [state.input.text, BOLD], ['█', SKY]], [['ABC-123 · 42 · issue URL · "a description" · --note "…"   enter launch · esc cancel', DIM]]];
+  if (state.menu !== null && state.page === 'issues') {
+    return [
+      [['Issues', DIM]],
+      ...ISSUE_MENU.map((item, i): Seg[] => {
+        const on = i === state.menu;
+        return [[on ? '› ' : '  ', on ? SKY : null], [item.key, BOLD], ['  ', null], [item.label(state).padEnd(34), on ? SKY : INK], [item.hint, DIM]];
+      }),
+      [['↑↓ choose · enter or the letter runs it · esc closes', DIM]],
+    ];
+  }
   if (state.menu !== null) {
     const names = targets(state).map((r) => r.key ?? r.label);
     const what = state.marks.length ? `${names.length} ticked: ${names.join(', ')}` : names[0] ?? '';
@@ -449,7 +459,7 @@ export function issuesScreen(state: State): string[] {
   if (is.filter || is.filtering) sums.push(['   / ', DIM], [is.filter, BOLD], ...(is.filtering ? ([['█', SKY]] as Seg[]) : []));
   const trackers: Seg[] = [...trackerChip('Jira', is.jira, 'J'), ['   ', null], ...trackerChip('GitHub', is.github, 'G')];
   const top = header(state, [], sums, trackers).map((l) => paint(l, w));
-  const act: Hint[] = [['enter', 'launch'], ['n', 'new'], ['/', 'filter'], ['o', 'open'], ['r', 'refresh'], ['J', 'connect Jira']];
+  const act: Hint[] = [['m', 'menu'], ['enter', 'launch'], ['n', 'new'], ['/', 'filter'], ['o', 'open'], ['r', 'refresh'], ['J', 'connect Jira']];
   if (is.github.state !== 'connected') act.push(['G', 'connect GitHub']);
   act.push(['q', 'quit']);
   const bottom = footer(state, [[['1', 'sessions'], ['↑↓', 'select'], ['space', 'tick'], ['*', 'all']], act]).map((l) => paint(l, w));
