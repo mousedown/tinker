@@ -420,7 +420,7 @@ const ISSUE_COLUMNS: Column[] = [
   { key: 'mark', title: '', width: 1 },
   { key: 'src', title: 'SRC', width: 3 },
   { key: 'key', title: 'KEY', width: 10 },
-  { key: 'status', title: 'STATUS', width: 13, drop: 0 },
+  { key: 'status', title: 'STATUS', width: 13 },
   { key: 'title', title: 'TITLE', width: 20, flex: true },
   { key: 'session', title: 'SESSION', width: 19, drop: 3 },
   { key: 'pr', title: 'PR', width: 13, drop: 2 },

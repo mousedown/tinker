@@ -110,3 +110,15 @@ describe('m on the Issues page', () => {
     expect(reduce(s, { type: 'key', key: { name: 'char', ch: 'o' } }).effects).toEqual([{ type: 'open', url: 'u1' }]);
   });
 });
+
+describe('the STATUS column', () => {
+  test('stays on a narrow terminal with a configured field, after SESSION, PR and CI have gone', () => {
+    let s = page([{ ...sv1, extra: { 'Launch Priority': 'P2' } }], on('Chris A'), off);
+    s = { ...s, width: 80, settings: { ...s.settings, issueFields: ['Launch Priority'] } };
+    const l = screen(s).map(stripAnsi);
+    const head = l.find((x) => x.includes('KEY'))!;
+    expect(head).toContain('STATUS');
+    expect(head).toContain('LAUNCH PRIORITY');
+    expect(l.find((x) => x.includes('SV-1'))).toContain('To Do');
+  });
+});
