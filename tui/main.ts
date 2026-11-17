@@ -18,6 +18,7 @@ import {
 } from './data';
 import { claudeDir, parseAuthStatus, readLimits, tokensOf, type Account } from './account';
 import { credsFile, credsFromEnv, jiraMyself, normaliseSite, saveCreds, type Fetch, type Run } from './jira';
+import { launchDir } from './issues';
 import { loadIssues } from './load-issues';
 import { machineSampler } from './machine';
 import { decode } from './runtime/keys';
@@ -70,6 +71,15 @@ export async function loadRows(force = false): Promise<Row[]> {
       pr: prFor(key, prs.get(s.cwd) ?? [], verdict, branch),
     };
   });
+}
+
+/** The launcher's args with `--repo` added for a Jira key, unless TINKER_REPO already decides. */
+async function withRepo(args: string, rows: Row[]): Promise<string[]> {
+  const split = splitArgs(args);
+  if (process.env.TINKER_REPO) return split;
+  const dir = launchDir(args, rows);
+  const root = dir && existsSync(dir) ? await repoRoot(dir) : null;
+  return root ? ['--repo', root, ...split] : split;
 }
 
 function splitArgs(line: string): string[] {
@@ -367,7 +377,7 @@ async function main(): Promise<void> {
         const said: string[] = [];
         let ok = true;
         for (const args of effect.batches) {
-          const r = await capture([LAUNCHER, ...splitArgs(args)]);
+          const r = await capture([LAUNCHER, ...(await withRepo(args, state.rows))]);
           ok &&= r.ok;
           said.push(...r.out.split('\n').filter(Boolean).map((l) => l.split('\t').slice(0, 2).join(' ')));
           await refresh();
@@ -376,7 +386,7 @@ async function main(): Promise<void> {
         return;
       }
       case 'launch': {
-        const r = await capture([LAUNCHER, ...splitArgs(effect.args)]);
+        const r = await capture([LAUNCHER, ...(await withRepo(effect.args, state.rows))]);
         const lines = r.out.split('\n').filter(Boolean).map((l) => l.split('\t').slice(0, 2).join(' '));
         dispatch({ type: 'message', text: lines.join(' · ') || (r.ok ? 'Launched.' : 'Launch failed.'), tone: r.ok ? 'info' : 'error' });
         await refresh();

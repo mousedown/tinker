@@ -86,7 +86,9 @@ Press `tab` in `tinker tui` for the Issues page: your open Jira and GitHub issue
 marked with its session if it has one. `space` ticks, `/` filters, and `enter` launches a worker on
 each ticked issue through `tinker`, so the memory and time budgets still apply. Launching an issue
 that already has a running session asks first. `n` launches one that isn't in the list: type a key,
-an issue URL or a description, as on the Sessions page.
+an issue URL or a description, as on the Sessions page. A Jira key launches in the repo where your last
+session on the same project ran, so the TUI can be started from anywhere; `TINKER_REPO` overrides it.
+`m` opens a menu with the same actions.
 
 - **GitHub** uses `gh`. If it isn't signed in, `G` runs `gh auth login --web`.
 - **Jira** uses an API token. `J` opens Atlassian's token page and asks for your site, email and the

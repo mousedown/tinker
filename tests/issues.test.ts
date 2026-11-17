@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { fieldText, jqlFor, launchArgs, resolveFields, matches, parseGhAuth, parseGhIssues, parseJiraSearch, sessionFor, type Issue } from '../tui/issues';
+import { fieldText, jqlFor, launchArgs, launchDir, resolveFields, matches, parseGhAuth, parseGhIssues, parseJiraSearch, sessionFor, type Issue } from '../tui/issues';
 import { row } from './fixtures';
 
 const jiraIssue: Issue = {
@@ -105,5 +105,24 @@ describe('extra Jira fields', () => {
       { label: 'launch priority', id: 'customfield_1' },
       { label: 'priority', id: 'priority' },
     ]);
+  });
+});
+
+describe('launchDir', () => {
+  const rows = [
+    { key: 'SV-1', cwd: '/web/.claude/worktrees/a', startedAt: 1 },
+    { key: 'SV-2', cwd: '/web/.claude/worktrees/b', startedAt: 2 },
+    { key: 'OPS-1', cwd: '/ops', startedAt: 3 },
+    { key: null, cwd: '/x', startedAt: 4 },
+  ];
+  test('a Jira key runs where the newest session on its project ran', () => {
+    expect(launchDir('SV-4244', rows)).toBe('/web/.claude/worktrees/b');
+    expect(launchDir('OPS-9 OPS-10', rows)).toBe('/ops');
+  });
+  test('an explicit repo, an unknown project, GitHub or a description decide nothing', () => {
+    expect(launchDir('--repo "/r" SV-4244', rows)).toBeNull();
+    expect(launchDir('ABC-1', rows)).toBeNull();
+    expect(launchDir('GH-3', rows)).toBeNull();
+    expect(launchDir('"fix the footer"', rows)).toBeNull();
   });
 });

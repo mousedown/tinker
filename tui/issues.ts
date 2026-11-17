@@ -127,3 +127,16 @@ export function matches(issue: Issue, filter: string): boolean {
   if (!f) return true;
   return [issue.key, issue.title, ...Object.values(issue.extra ?? {})].some((t) => t.toLowerCase().includes(f));
 }
+
+/**
+ * Where a launch with no `--repo` should run: the folder of the newest session on the same project
+ * (`SV-` for `SV-12`), so the TUI's own directory doesn't decide. Null when the args name a repo,
+ * hold no key, or no session has worked on that project yet.
+ */
+export function launchDir(args: string, rows: Pick<Row, 'key' | 'cwd' | 'startedAt'>[]): string | null {
+  if (/(^|\s)--repo(\s|$)/.test(args)) return null;
+  const project = /\b([A-Z][A-Z0-9]*)-\d+\b/.exec(args)?.[1];
+  if (!project || project === 'GH') return null;
+  const hits = rows.filter((r) => r.key?.startsWith(`${project}-`)).sort((a, b) => b.startedAt - a.startedAt);
+  return hits[0]?.cwd ?? null;
+}
