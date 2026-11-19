@@ -45,7 +45,8 @@ On launch, tinker checks once a day for a newer release and offers to update (TI
 turns that off). tinker update updates now.
 
 Self-review defaults to Claude Code's /code-review --fix; set TINKER_REVIEW (e.g. "/my-review --fix")
-to use another review command.
+to use another review command. Prepare follows Tinker's own steps unless TINKER_PREPARE, or the repo's
+CLAUDE.md, names the repo's own command for taking a branch to a ready PR (e.g. "/prep").
 EOF
 }
 

@@ -35,7 +35,10 @@ names, commit and PR title formats, test commands and conventions all come from 
    done looks like. If the issue is already fixed on the default branch, finish as `DONE none` and
    say where.
 2. **Isolate.** Enter a fresh worktree off the latest default branch, named per the repo's
-   convention for this issue. Copy the main checkout's untracked env files (`.env*`) into it.
+   convention for this issue. Copy the main checkout's untracked env files (`.env*`) into it, then
+   install dependencies with the repo's package manager (the lockfile says which). A worktree with
+   no dependencies can resolve packages from the main checkout instead, and its checks then fail, or
+   pass, for reasons that are not real.
 3. **Understand.** Read the code the issue touches and the domain docs the repo points to.
    Reproduce a bug before fixing it.
 4. **Fix test-first.** A failing test that proves the issue, then the smallest change that passes it.
@@ -49,13 +52,16 @@ names, commit and PR title formats, test commands and conventions all come from 
    `/code-review --fix`. Grade every finding: **P0** breaks correctness, security or data; **P1**
    must be fixed before merge; **P2** is worth noting. Keep at most three review rounds in total,
    and from round two review only the fix delta. If a P0 or P1 is still open after round three,
-   leave the PR as a draft and park. Remaining P2s go in the PR body.
+   leave the PR as a draft and park. Remaining P2s go in the PR body, unless the repo's review gate
+   blocks on P2s or deferrals too (its CLAUDE.md or CI says so): then fix them like a P1.
 8. **Watch CI to green.** A pushed draft PR is not the end: wait for CI on the PR's head with
    `gh pr checks <n> --watch` (or poll `gh pr checks <n> --json name,state,link`). When a check fails,
    read its log before touching anything (`gh run view <run> --job <job> --log | tail -200`) and
    classify it:
    - **Caused by this change** (a test, lint, type or build failure, a mock missing a new export):
-     fix it, re-run the matching checks locally, commit, push, and watch again.
+     fix it, re-run the matching checks locally, commit, push, and watch again. A fix moves the head,
+     so review the fix delta again as in stage 7 before you watch: a repo that gates merges on a
+     review at the head blocks a PR whose review names an older commit.
    - **Flaky, infra, or a gate that read stale state** (a timeout, a runner error, a log that says a
      review or verdict is missing when one now exists on the PR): `gh run rerun <run> --failed`, once
      per check per head, and watch again.
@@ -74,6 +80,8 @@ is the go-ahead for its own scope, and every other rule here still holds:
 
 - `Tinker command: prepare …` (or `/tinker:prepare …`) takes this PR to ready, and with `--auto-merge`
   arms auto-merge. Follow the skill file it names; it lifts the "never mark ready" rule for that run only.
+  When the repo has its own command for this (`--prepare`, or one its CLAUDE.md names), the skill hands
+  the work to it.
 - `Tinker command: fix CI …` and `Tinker command: update …` work on this PR's branch only, and leave
   its draft state alone.
 

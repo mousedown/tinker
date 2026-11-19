@@ -39,6 +39,9 @@ state of its own.
   or touch production, secrets or CI settings.
 - **One command for many issues**: Jira keys, GitHub issue numbers, issue URLs or a plain sentence.
   Duplicates are dropped, and new sessions wait if the machine is short on memory.
+- **Fits your repo's own flow**: point it at your review command and your own prepare command
+  (`TINKER_REVIEW`, `TINKER_PREPARE`, or a line in CLAUDE.md), and workers use those, so a repo
+  that gates merges on its own review or keeps docs in step gets PRs that pass its gates.
 - **A live view**: `tinker tui` groups every session by what needs you and shows its PR, CI and
   latest line. Tick a few and prepare them all for review at once.
 
@@ -138,7 +141,7 @@ row. Actions resume the worker in the background with its context kept.
 | Key | Does |
 |---|---|
 | `space` / `*` / `t` / `u` | Tick a row / its whole group / everything to tidy / clear ticks |
-| `p` | Prepare the ticked PRs: merge the base in, run checks, push, review, rewrite the description, mark ready |
+| `p` | Prepare the ticked PRs: merge the base in, run checks, push, review, rewrite the description, mark ready. Uses the repo's own prepare command when it has one |
 | `c` | Clean up the session, its worktree, and the branch if the PR merged |
 | `m` | Menu: prepare, mark ready, back to draft, fix CI, update, auto-merge, clean up, relaunch |
 | `D` / `M` / `T` | Toggle stop at draft, auto-merge after prepare, auto-tidy merged sessions |
@@ -155,6 +158,7 @@ row. Actions resume the worker in the background with its context kept.
 |---|---|
 | `TINKER_KEY_PREFIX` | Makes a bare number mean `<PREFIX>-<n>` instead of a GitHub issue |
 | `TINKER_REVIEW` | Self-review command (default: `/code-review --fix`, or whatever the repo's CLAUDE.md names) |
+| `TINKER_PREPARE` | The repo's own prepare command, e.g. `/prep` (default: Tinker's own steps, or whatever the repo's CLAUDE.md names). `--draft` and auto-merge still apply after it |
 | `TINKER_REPO` | Repository to launch in (default: the current checkout) |
 | `TINKER_AGENT` | Worker agent (default `tinker:tinker`) |
 | `TINKER_SESSION_MB` | Fixed memory budget per session instead of the learned one (`0` turns the check off) |
@@ -165,6 +169,15 @@ row. Actions resume the worker in the background with its context kept.
 The memory budget is learned: each session is measured with everything it started, and a new one is
 budgeted the largest recent peak. Issues that don't fit are held, not launched; `--force` overrides.
 The TUI toggles are saved in `~/.config/tinker/settings.json`.
+
+Rather than set the two commands per machine, a repo can name them in its CLAUDE.md, for example:
+
+```markdown
+## Agent commands
+
+- Review: `/pullbot --fix`
+- Prepare a PR: `/prep`
+```
 
 </details>
 

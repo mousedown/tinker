@@ -82,6 +82,7 @@ describe('menu', () => {
     expect(preparePrompt(d1, { draft: true, autoMerge: true, autoTidy: false }, '/pullbot --fix', '/t/SKILL.md')).toContain(
       'follow it with --draft --auto-merge --review "/pullbot --fix".'
     );
+    expect(preparePrompt(d1, DEFAULTS, undefined, '/t/SKILL.md', '/prep')).toContain('follow it with --prepare "/prep".');
     expect(PREPARE_SKILL).toEndWith('skills/prepare/SKILL.md');
     expect(existsSync(PREPARE_SKILL)).toBe(true);
   });

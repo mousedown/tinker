@@ -1,6 +1,6 @@
 ---
 name: prepare
-description: Take a finished branch to a submitted PR in any repository - bring the base in, run the repo's checks, refresh docs the repo generates, push, review at the final head, rewrite the PR description, then mark it ready (or leave it as a draft) and optionally arm auto-merge. Use for "/tinker:prepare", "prepare this PR", or when the Tinker TUI resumes a worker with it. Flags --draft, --auto-merge, --review "<command>", --dry-run.
+description: Take a finished branch to a submitted PR in any repository - bring the base in, run the repo's checks, refresh docs the repo generates, push, review at the final head, rewrite the PR description, then mark it ready (or leave it as a draft) and optionally arm auto-merge. Hands the work to the repo's own prepare command when it has one. Use for "/tinker:prepare", "prepare this PR", or when the Tinker TUI resumes a worker with it. Flags --draft, --auto-merge, --review "<command>", --prepare "<command>", --dry-run.
 ---
 
 # Prepare
@@ -26,8 +26,23 @@ preflight → merge base in → checks → generated docs → commit + push → 
 | `--draft` | Stop at draft: do everything except `gh pr ready` and auto-merge |
 | `--auto-merge` | After ready, arm auto-merge with the repo's allowed merge method |
 | `--review "<cmd>"` | Review command to run; else `TINKER_REVIEW`; else the one the repo's CLAUDE.md names; else `/code-review --fix` |
+| `--prepare "<cmd>"` | The repo's own prepare command; else `TINKER_PREPARE`; else the one the repo's CLAUDE.md names; else none (see below) |
 | `--dry-run` | Phases 0–3 read-only, then print what it would do; write nothing to the branch or GitHub |
 | `for PR #N on branch B` | Which PR and branch; otherwise the current branch's PR |
+
+## The repo's own prepare command
+
+A repo that has its own command for taking a branch to a ready PR (a `/prep` or `/ship` skill, say)
+knows its gates better than this file can: the review its CI requires, the knowledge base or docs it
+keeps in step, the order those must run in. When `--prepare` names one, or `TINKER_PREPARE` does, or
+the repo's CLAUDE.md names one, run that command on this PR instead of phases 0 to 7 here, and let it
+make every call it makes, including its own review. Pass `--dry-run` through when it supports one.
+
+Then finish here: if it marked the PR ready and `--draft` is set, put it back with
+`gh pr ready <n> --undo`; with `--auto-merge`, run phase 9 once the PR is ready; then report as
+below. If the command stops part way, stop too and report where it stopped.
+
+With no such command, follow the phases below.
 
 ## The ordering rule
 
