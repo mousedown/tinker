@@ -1,5 +1,5 @@
-import { jqlFor, parseGhAuth, parseGhIssues, type Issue } from './issues';
-import { jiraMyself, jiraSearch, loadCreds, type Fetch, type Run } from './jira';
+import { jqlFor, parseGhAuth, parseGhIssues, resolveFields, type ExtraField, type Issue } from './issues';
+import { jiraFields, jiraMyself, jiraSearch, loadCreds, type Fetch, type Run } from './jira';
 import type { Tracker } from './state';
 
 export interface LoadDeps {
@@ -14,6 +14,8 @@ export interface LoadDeps {
   repos: string[];
   /** Keys the sessions work on, so their tickets can be named even when not in the list. */
   keys: string[];
+  /** Extra Jira fields to show, by name or id. */
+  fields?: string[];
 }
 
 const DISCONNECTED: Tracker = { state: 'disconnected', who: null };
@@ -40,15 +42,16 @@ async function github(d: LoadDeps): Promise<{ tracker: Tracker; issues: Issue[] 
 async function jira(d: LoadDeps): Promise<{ tracker: Tracker; issues: Issue[]; tickets: Issue[]; site?: string }> {
   const creds = await loadCreds(d.run, d.env, d.platform, d.file);
   if (!creds) return { tracker: DISCONNECTED, issues: [], tickets: [] };
-  const [me, found] = await Promise.all([jiraMyself(creds, d.fetch), jiraSearch(creds, jqlFor(d.prefix, d.jql), d.fetch)]);
+  const extra: ExtraField[] = d.fields?.length ? resolveFields(d.fields, await jiraFields(creds, d.fetch)) : [];
+  const [me, found] = await Promise.all([jiraMyself(creds, d.fetch), jiraSearch(creds, jqlFor(d.prefix, d.jql), d.fetch, extra)]);
   if (!found.ok) return { tracker: { state: found.why === 'rejected' ? 'rejected' : 'unreachable', who: null }, issues: [], tickets: [], site: creds.site };
   const listed = new Set(found.issues.map((i) => i.key));
   const missing = [...new Set(d.keys)].filter((k) => /^[A-Z][A-Z0-9]*-\d+$/.test(k) && !k.startsWith('GH-') && !listed.has(k)).slice(0, 50);
-  const extra = missing.length ? await jiraSearch(creds, `key in (${missing.join(',')})`, d.fetch) : null;
+  const known = missing.length ? await jiraSearch(creds, `key in (${missing.join(',')})`, d.fetch, extra) : null;
   return {
     tracker: { state: 'connected', who: me.ok ? me.name : creds.email },
     issues: found.issues,
-    tickets: extra?.ok ? extra.issues : [],
+    tickets: known?.ok ? known.issues : [],
     site: creds.site,
   };
 }

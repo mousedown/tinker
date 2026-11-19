@@ -569,7 +569,7 @@ function reduceInput(state: State, key: Key): Step {
   if (key.name === 'enter') {
     const args = input.text.trim();
     if (!args) return { state: { ...state, input: null }, effects: [] };
-    return { state: say({ ...state, input: null }, `Launching ${args}…`), effects: [{ type: 'launch', args }] };
+    return { state: say({ ...state, input: null, page: 'sessions' }, `Launching ${args}…`), effects: [{ type: 'launch', args }] };
   }
   if (key.name === 'backspace') {
     return { state: { ...state, input: { ...input, text: input.text.slice(0, -1) } }, effects: [] };
@@ -588,7 +588,7 @@ function reduceConfirm(state: State, key: Key): Step {
 function reduceKey(state: State, key: Key): Step {
   if (state.input !== null) return reduceInput(state, key);
   if (state.confirm) return reduceConfirm(state, key);
-  if (state.menu !== null) return reduceMenu(state, key);
+  if (state.menu !== null) return state.page === 'issues' ? reduceIssueMenu(state, key) : reduceMenu(state, key);
   if (state.page === 'issues') return reduceIssuesKey(state, key);
 
   const row = selected(state);
@@ -737,11 +737,69 @@ function moveIssue(state: State, by: number): State {
   return withIssues(state, { selKey: shown[Math.min(shown.length - 1, Math.max(0, at + by))].url });
 }
 
-function launchIssues(state: State): Step {
+/** The ticked issues, else the selected one. */
+export function issuePicks(state: State): Issue[] {
   const shown = shownIssues(state);
   const ticked = state.issues.marks.map((u) => state.issues.list.find((i) => i.url === u)).filter((i): i is Issue => Boolean(i));
   const sel = selectedIssue(state);
-  const picks = ticked.length ? ticked : sel && shown.includes(sel) ? [sel] : [];
+  return ticked.length ? ticked : sel && shown.includes(sel) ? [sel] : [];
+}
+
+export interface IssueMenuItem {
+  key: string;
+  label: (state: State) => string;
+  hint: string;
+  run: (state: State) => Step;
+}
+
+export const ISSUE_MENU: IssueMenuItem[] = [
+  {
+    key: 's',
+    label: (s) => {
+      const keys = issuePicks(s).map((i) => i.key);
+      return keys.length ? `Start tinker on ${keys.length > 3 ? `${keys.slice(0, 3).join(', ')} +${keys.length - 3}` : keys.join(', ')}` : 'Start tinker';
+    },
+    hint: 'a worker per issue, through the launcher’s memory and time budgets',
+    run: (s) => launchIssues(s),
+  },
+  {
+    key: 'n',
+    label: () => 'Start tinker on another issue…',
+    hint: 'a key, an issue URL or a description',
+    run: (s) => ({ state: { ...s, input: { kind: 'new', text: '' } }, effects: [] }),
+  },
+  {
+    key: 'o',
+    label: () => 'Open the ticket',
+    hint: 'in the browser',
+    run: (s) => {
+      const sel = selectedIssue(s);
+      return sel ? { state: s, effects: [{ type: 'open', url: sel.url }] } : { state: say(s, 'Nothing selected.', 'error'), effects: [] };
+    },
+  },
+  { key: 'r', label: () => 'Refresh', hint: 'reload both trackers', run: (s) => ({ state: say(s, 'Refreshing issues…'), effects: [{ type: 'load-issues' }] }) },
+  {
+    key: 'J',
+    label: () => 'Connect Jira',
+    hint: 'site, email and an API token',
+    run: (s) => ({ state: { ...s, input: { kind: 'jira', field: 'site', site: '', email: '', token: '' } }, effects: [{ type: 'open', url: TOKEN_PAGE }] }),
+  },
+];
+
+function reduceIssueMenu(state: State, key: Key): Step {
+  const at = state.menu ?? 0;
+  const closed: State = { ...state, menu: null };
+  if (key.name === 'esc' || key.name === 'ctrl-c' || key.name === 'left' || (key.name === 'char' && (key.ch === 'm' || key.ch === ':' || key.ch === 'q')))
+    return { state: closed, effects: [] };
+  if (key.name === 'up' || (key.name === 'char' && key.ch === 'k')) return { state: { ...state, menu: (at + ISSUE_MENU.length - 1) % ISSUE_MENU.length }, effects: [] };
+  if (key.name === 'down' || (key.name === 'char' && key.ch === 'j')) return { state: { ...state, menu: (at + 1) % ISSUE_MENU.length }, effects: [] };
+  if (key.name === 'enter' || key.name === 'right') return ISSUE_MENU[at].run(closed);
+  const hit = key.name === 'char' ? ISSUE_MENU.find((m) => m.key === key.ch) : undefined;
+  return hit ? hit.run(closed) : { state, effects: [] };
+}
+
+function launchIssues(state: State): Step {
+  const picks = issuePicks(state);
   if (!picks.length) return { state: say(state, 'Nothing selected.', 'error'), effects: [] };
   const running = (i: Issue) => {
     const r = sessionFor(i, state.rows);
@@ -782,6 +840,8 @@ function reduceIssuesKey(state: State, key: Key): Step {
   if (key.name === 'pagedown') return { state: moveIssue(fresh, 10), effects: [] };
   if (ch === '/') return { state: withIssues(fresh, { filtering: true }), effects: [] };
   if (ch === 'r') return { state: say(fresh, 'Refreshing issues…'), effects: [{ type: 'load-issues' }] };
+  if (ch === 'n') return { state: { ...fresh, input: { kind: 'new', text: '' } }, effects: [] };
+  if (ch === 'm' || ch === ':') return { state: { ...fresh, menu: 0 }, effects: [] };
   if (ch === 'J')
     return { state: { ...fresh, input: { kind: 'jira', field: 'site', site: '', email: '', token: '' } }, effects: [{ type: 'open', url: TOKEN_PAGE }] };
   if (ch === 'G') {

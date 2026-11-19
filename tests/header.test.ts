@@ -95,3 +95,17 @@ describe('the header panel', () => {
     expect(lines(s).findIndex((x) => x.startsWith('╰'))).toBe(4);
   });
 });
+
+describe('the version in the header', () => {
+  test('stays when the line is narrow, the tabs cut instead', () => {
+    const l = lines(state(40));
+    expect(l[0]).toEndWith(` v${VERSION} ─╮`);
+    expect(cells(l[0])).toBe(40);
+  });
+
+  test('a long update hint gives way to the bare version', () => {
+    const l = lines(state(60, { update: '9.9.9' }));
+    expect(l[0]).toContain(`v${VERSION}`);
+    expect(cells(l[0])).toBe(60);
+  });
+});

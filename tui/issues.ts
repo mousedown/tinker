@@ -12,13 +12,35 @@ export interface Issue {
   updatedAt: number;
   /** The local repo a GitHub issue belongs to; null for Jira. */
   repo: string | null;
+  /** The configured extra fields, by the name the setting gave them; only set when some were asked for. */
+  extra?: Record<string, string>;
+}
+
+/** A configured extra field: what the setting called it, and the Jira id it resolved to. */
+export interface ExtraField {
+  label: string;
+  id: string;
+}
+
+/** A Jira field value as one line: options, users and versions by their name, lists joined. */
+export function fieldText(v: unknown): string {
+  if (v === null || v === undefined) return '';
+  if (typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean') return String(v);
+  if (Array.isArray(v)) return v.map(fieldText).filter(Boolean).join(', ');
+  if (typeof v === 'object') {
+    const o = v as Record<string, unknown>;
+    const own = fieldText(o.value ?? o.name ?? o.displayName ?? o.key ?? '');
+    const child = o.child ? fieldText(o.child) : '';
+    return child ? `${own} / ${child}` : own;
+  }
+  return '';
 }
 
 interface JiraSearch {
-  issues?: { key: string; fields?: { summary?: string; status?: { name?: string }; updated?: string } }[];
+  issues?: { key: string; fields?: { summary?: string; status?: { name?: string }; updated?: string; [id: string]: unknown } }[];
 }
 
-export function parseJiraSearch(json: string, site: string): Issue[] {
+export function parseJiraSearch(json: string, site: string, extra: ExtraField[] = []): Issue[] {
   try {
     return ((JSON.parse(json) as JiraSearch).issues ?? []).map((i) => ({
       source: 'jira',
@@ -28,10 +50,21 @@ export function parseJiraSearch(json: string, site: string): Issue[] {
       url: `${site}/browse/${i.key}`,
       updatedAt: Date.parse(i.fields?.updated ?? '') || 0,
       repo: null,
+      ...(extra.length ? { extra: Object.fromEntries(extra.map((f) => [f.label, fieldText(i.fields?.[f.id])])) } : {}),
     }));
   } catch {
     return [];
   }
+}
+
+/** Each configured field matched to a Jira field by id, else by name ignoring case; unknown ones are dropped. */
+export function resolveFields(wanted: string[], known: { id: string; name: string }[]): ExtraField[] {
+  const out: ExtraField[] = [];
+  for (const label of wanted) {
+    const hit = known.find((k) => k.id === label) ?? known.find((k) => k.name.toLowerCase() === label.toLowerCase());
+    if (hit) out.push({ label, id: hit.id });
+  }
+  return out;
 }
 
 interface GhIssue {
@@ -91,5 +124,19 @@ export function launchBatches(issues: Issue[]): string[] {
 
 export function matches(issue: Issue, filter: string): boolean {
   const f = filter.trim().toLowerCase();
-  return !f || issue.key.toLowerCase().includes(f) || issue.title.toLowerCase().includes(f);
+  if (!f) return true;
+  return [issue.key, issue.title, ...Object.values(issue.extra ?? {})].some((t) => t.toLowerCase().includes(f));
+}
+
+/**
+ * Where a launch with no `--repo` should run: the folder of the newest session on the same project
+ * (`SV-` for `SV-12`), so the TUI's own directory doesn't decide. Null when the args name a repo,
+ * hold no key, or no session has worked on that project yet.
+ */
+export function launchDir(args: string, rows: Pick<Row, 'key' | 'cwd' | 'startedAt'>[]): string | null {
+  if (/(^|\s)--repo(\s|$)/.test(args)) return null;
+  const project = /\b([A-Z][A-Z0-9]*)-\d+\b/.exec(args)?.[1];
+  if (!project || project === 'GH') return null;
+  const hits = rows.filter((r) => r.key?.startsWith(`${project}-`)).sort((a, b) => b.startedAt - a.startedAt);
+  return hits[0]?.cwd ?? null;
 }

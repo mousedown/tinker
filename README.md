@@ -88,7 +88,10 @@ such as the Atlassian MCP server.
 Press `tab` in `tinker tui` for the Issues page: your open Jira and GitHub issues in one list, each
 marked with its session if it has one. `space` ticks, `/` filters, and `enter` launches a worker on
 each ticked issue through `tinker`, so the memory and time budgets still apply. Launching an issue
-that already has a running session asks first.
+that already has a running session asks first. `n` launches one that isn't in the list: type a key,
+an issue URL or a description, as on the Sessions page. A Jira key launches in the repo where your last
+session on the same project ran, so the TUI can be started from anywhere; `TINKER_REPO` overrides it.
+`m` opens a menu with the same actions.
 
 - **GitHub** uses `gh`. If it isn't signed in, `G` runs `gh auth login --web`.
 - **Jira** uses an API token. `J` opens Atlassian's token page and asks for your site, email and the
@@ -98,6 +101,9 @@ that already has a running session asks first.
 - The Jira list is `assignee = currentUser() AND statusCategory != Done`, narrowed to
   `TINKER_KEY_PREFIX`'s project when that is set. Set `"jql"` in `~/.config/tinker/settings.json`
   to use your own query.
+- Set `"issueFields"` in the same file to show more Jira fields as columns after STATUS, by name or
+  id: `"issueFields": ["Launch Priority", "customfield_10042"]`. Names match ignoring case, an
+  unknown one shows `—`, and `/` filters on their values too.
 
 The TUI only reads from Jira. It never comments, edits or transitions a ticket.
 
@@ -164,6 +170,7 @@ row. Actions resume the worker in the background with its context kept.
 | `TINKER_SESSION_MB` | Fixed memory budget per session instead of the learned one (`0` turns the check off) |
 | `TINKER_MAX_SESSIONS` | Most sessions running at once |
 | `TINKER_LINKS=0` | Turns off clickable links for a terminal that prints them raw |
+| `TINKER_CLICK` | `1` makes the TUI open a link you click itself, `0` leaves clicks to the terminal. On by default in Apple Terminal, which can't follow the TUI's links; hold option there to select text |
 | `TINKER_NO_UPDATE_CHECK=1` | Skips the daily update check |
 
 The memory budget is learned: each session is measured with everything it started, and a new one is

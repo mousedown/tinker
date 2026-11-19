@@ -8,9 +8,11 @@ export interface Settings {
   autoTidy: boolean;
   /** Overrides the Issues page's Jira query. */
   jql: string | null;
+  /** Extra Jira fields shown as columns on the Issues page, by name ("Launch Priority") or id ("customfield_10042"). */
+  issueFields: string[];
 }
 
-export const DEFAULTS: Settings = { draft: false, autoMerge: false, autoTidy: false, jql: null };
+export const DEFAULTS: Settings = { draft: false, autoMerge: false, autoTidy: false, jql: null, issueFields: [] };
 
 export function settingsPath(env: Record<string, string | undefined> = process.env): string {
   const base = env.XDG_CONFIG_HOME || join(homedir(), '.config');
@@ -26,6 +28,9 @@ export function loadSettings(path = settingsPath()): Settings {
       autoMerge: raw.autoMerge === true,
       autoTidy: raw.autoTidy === true,
       jql: typeof raw.jql === 'string' && raw.jql.trim() ? raw.jql : null,
+      issueFields: Array.isArray(raw.issueFields)
+        ? [...new Set(raw.issueFields.filter((f): f is string => typeof f === 'string').map((f) => f.trim()).filter(Boolean))]
+        : [],
     };
   } catch {
     return { ...DEFAULTS };

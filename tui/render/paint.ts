@@ -1,6 +1,6 @@
 /** Turns segments into one terminal line, and builds the shared chrome. */
 
-import { segsWidth, truncate, type Seg } from './text';
+import { segsWidth, stripAnsi, truncate, type Seg } from './text';
 import {
   BLUE,
   BOLD,
@@ -96,4 +96,20 @@ export function crumbs(steps: string[]): Seg[] {
     segs.push([step, i === steps.length - 1 ? BOLD : DIM]);
   });
   return segs;
+}
+
+/** The URL of the OSC 8 hyperlink at 1-based column `x` of row `y` in a drawn frame, if any. */
+export function linkAt(lines: string[] | null, x: number, y: number): string | null {
+  const line = lines?.[y - 1];
+  if (!line) return null;
+  // eslint-disable-next-line no-control-regex
+  const parts = line.split(/\x1b\]8;;([^\x1b]*)\x1b\\/);
+  let col = 0;
+  for (let i = 0; i < parts.length; i += 2) {
+    const width = segsWidth([[stripAnsi(parts[i]), null]]);
+    const url = i > 0 ? parts[i - 1] : '';
+    if (url && x > col && x <= col + width) return url;
+    col += width;
+  }
+  return null;
 }

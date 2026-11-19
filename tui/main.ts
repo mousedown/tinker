@@ -18,10 +18,12 @@ import {
 } from './data';
 import { claudeDir, parseAuthStatus, readLimits, tokensOf, type Account } from './account';
 import { credsFile, credsFromEnv, jiraMyself, normaliseSite, saveCreds, type Fetch, type Run } from './jira';
+import { launchDir } from './issues';
 import { loadIssues } from './load-issues';
 import { machineSampler } from './machine';
 import { decode } from './runtime/keys';
-import { openUrl, restoreOnExit, terminal } from './runtime/tty';
+import { clicksLinks, openUrl, restoreOnExit, terminal } from './runtime/tty';
+import { linkAt } from './render/paint';
 import { diffFrame } from './runtime/writer';
 import { stripAnsi } from './render/text';
 import { useColor } from './render/theme';
@@ -70,6 +72,15 @@ export async function loadRows(force = false): Promise<Row[]> {
       pr: prFor(key, prs.get(s.cwd) ?? [], verdict, branch),
     };
   });
+}
+
+/** The launcher's args with `--repo` added for a Jira key, unless TINKER_REPO already decides. */
+async function withRepo(args: string, rows: Row[]): Promise<string[]> {
+  const split = splitArgs(args);
+  if (process.env.TINKER_REPO) return split;
+  const dir = launchDir(args, rows);
+  const root = dir && existsSync(dir) ? await repoRoot(dir) : null;
+  return root ? ['--repo', root, ...split] : split;
 }
 
 function splitArgs(line: string): string[] {
@@ -220,7 +231,7 @@ async function main(): Promise<void> {
     return;
   }
 
-  const term = terminal(process.stdin, process.stdout);
+  const term = terminal(process.stdin, process.stdout, clicksLinks());
   let state: State = { ...initialState(width(), height(), loadSettings()), update: availableUpdate() };
   const sample = machineSampler();
   let prev: string[] | null = null;
@@ -284,6 +295,7 @@ async function main(): Promise<void> {
         prefix: process.env.TINKER_KEY_PREFIX || null,
         repos,
         keys: state.rows.map((r) => r.key ?? r.label),
+        fields: state.settings.issueFields,
       });
       dispatch({ type: 'issues', ...r, now: Date.now() });
     } catch (error) {
@@ -366,7 +378,7 @@ async function main(): Promise<void> {
         const said: string[] = [];
         let ok = true;
         for (const args of effect.batches) {
-          const r = await capture([LAUNCHER, ...splitArgs(args)]);
+          const r = await capture([LAUNCHER, ...(await withRepo(args, state.rows))]);
           ok &&= r.ok;
           said.push(...r.out.split('\n').filter(Boolean).map((l) => l.split('\t').slice(0, 2).join(' ')));
           await refresh();
@@ -375,7 +387,7 @@ async function main(): Promise<void> {
         return;
       }
       case 'launch': {
-        const r = await capture([LAUNCHER, ...splitArgs(effect.args)]);
+        const r = await capture([LAUNCHER, ...(await withRepo(effect.args, state.rows))]);
         const lines = r.out.split('\n').filter(Boolean).map((l) => l.split('\t').slice(0, 2).join(' '));
         dispatch({ type: 'message', text: lines.join(' · ') || (r.ok ? 'Launched.' : 'Launch failed.'), tone: r.ok ? 'info' : 'error' });
         await refresh();
@@ -400,7 +412,14 @@ async function main(): Promise<void> {
 
   const onData = (chunk: Buffer | string) => {
     if (paused) return;
-    for (const key of decode(chunk.toString())) dispatch({ type: 'key', key });
+    for (const key of decode(chunk.toString())) {
+      if (key.name === 'click') {
+        const url = linkAt(prev, key.x ?? 0, key.y ?? 0);
+        if (url) openUrl(url);
+        continue;
+      }
+      dispatch({ type: 'key', key });
+    }
   };
   const onResize = () => {
     prev = null;

@@ -58,3 +58,67 @@ describe('issues view', () => {
     expect(text(typed(page([sv1], on('Chris A'), off), '/zzz'))).toContain('No issues match "zzz".');
   });
 });
+
+describe('configured issue fields', () => {
+  test('each one is a column after STATUS, filled from the issue or a dash', () => {
+    let s = page([{ ...sv1, extra: { 'Launch Priority': 'P2' } }, gh42], on('Chris A'), on('mousedown'));
+    s = { ...s, settings: { ...s.settings, issueFields: ['Launch Priority'] } };
+    const l = screen(s).map(stripAnsi);
+    const head = l.find((x) => x.includes('STATUS'))!;
+    expect(head.indexOf('LAUNCH PRIORITY')).toBeGreaterThan(head.indexOf('STATUS'));
+    expect(l.find((x) => x.includes('SV-1'))).toContain('P2');
+    expect(l.find((x) => x.includes('GH-42'))).toContain('—');
+  });
+
+  test('the filter matches their values', () => {
+    let s = page([{ ...sv1, extra: { 'Launch Priority': 'P2' } }, gh42], on('Chris A'), on('mousedown'));
+    s = typed(s, '/p2');
+    expect(text(s)).toContain('SV-1');
+    expect(text(s)).not.toContain('GH-42');
+  });
+});
+
+describe('n on the Issues page', () => {
+  test('opens the new-issue prompt, and launching it shows the sessions', () => {
+    let s = typed(page([sv1], on('Chris A'), off), 'n');
+    expect(s.input).toEqual({ kind: 'new', text: '' });
+    expect(text(s)).toContain('New issue ›');
+    s = typed(s, 'SV-4244');
+    const step = reduce(s, { type: 'key', key: { name: 'enter' } });
+    expect(step.effects).toEqual([{ type: 'launch', args: 'SV-4244' }]);
+    expect(step.state.page).toBe('sessions');
+  });
+});
+
+describe('m on the Issues page', () => {
+  test('opens a menu that starts tinker on the selected issue', () => {
+    const s = typed(page([sv1], on('Chris A'), off), 'm');
+    expect(s.menu).toBe(0);
+    const t = text(s);
+    expect(t).toContain('Start tinker on SV-1');
+    expect(t).toContain('Start tinker on another issue…');
+    const step = reduce(s, { type: 'key', key: { name: 'enter' } });
+    expect(step.effects).toEqual([{ type: 'launch-batch', batches: ['SV-1'] }]);
+    expect(step.state.page).toBe('sessions');
+    expect(step.state.menu).toBeNull();
+  });
+
+  test('its letters run items, and esc closes it', () => {
+    const s = typed(page([sv1], on('Chris A'), off), 'm');
+    expect(typed(s, 'n').input).toEqual({ kind: 'new', text: '' });
+    expect(reduce(s, { type: 'key', key: { name: 'esc' } }).state.menu).toBeNull();
+    expect(reduce(s, { type: 'key', key: { name: 'char', ch: 'o' } }).effects).toEqual([{ type: 'open', url: 'u1' }]);
+  });
+});
+
+describe('the STATUS column', () => {
+  test('stays on a narrow terminal with a configured field, after SESSION, PR and CI have gone', () => {
+    let s = page([{ ...sv1, extra: { 'Launch Priority': 'P2' } }], on('Chris A'), off);
+    s = { ...s, width: 80, settings: { ...s.settings, issueFields: ['Launch Priority'] } };
+    const l = screen(s).map(stripAnsi);
+    const head = l.find((x) => x.includes('KEY'))!;
+    expect(head).toContain('STATUS');
+    expect(head).toContain('LAUNCH PRIORITY');
+    expect(l.find((x) => x.includes('SV-1'))).toContain('To Do');
+  });
+});

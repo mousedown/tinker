@@ -5,7 +5,7 @@ import { keyLines, paint, type Hint } from './render/paint';
 import { fit as fitCells, headerRow, layout, tableRow, type Column } from './render/table';
 import type { Seg } from './render/text';
 import { AMBER, BLUE, BOLD, BRASS, DIM, GREEN, INK, INK2, MAGENTA, RED, SKY } from './render/theme';
-import { MENU, fit, isLive, landed, needsYou, newest, pendingOf, phaseOf, selected, selectedIssue, shownIssues, targets, ticketOf, tidyOf, visible, type State, type Tracker } from './state';
+import { ISSUE_MENU, MENU, fit, isLive, landed, needsYou, newest, pendingOf, phaseOf, selected, selectedIssue, shownIssues, targets, ticketOf, tidyOf, visible, type State, type Tracker } from './state';
 import { sessionFor, type Issue } from './issues';
 import { identity, machineStrip, usageStrip } from './strip';
 import { segsWidth, truncate } from './render/text';
@@ -199,12 +199,13 @@ const BIG_WIDTH = 130;
 const BIG_HEIGHT = 24;
 
 /** The border: `╭─ title ──── tag ─╮`, the tag dropped before the title is cut. */
-function boxEdge(title: Seg[], tag: Seg[], width: number): Seg[] {
+function boxEdge(title: Seg[], tag: Seg[], width: number, short: Seg[] = tag): Seg[] {
   const room = width - 6;
-  const withTag = segsWidth(title) + 2 + segsWidth(tag) <= room;
-  const t = truncate(title, room);
-  const fill = room - segsWidth(t) - (withTag ? segsWidth(tag) + 2 : 0);
-  return [['╭─ ', DIM], ...t, [` ${'─'.repeat(Math.max(0, fill))}`, DIM], ...(withTag ? ([[' ', null], ...tag] as Seg[]) : []), [' ─╮', DIM]];
+  const fits = (t: Seg[]) => segsWidth(title) + 2 + segsWidth(t) <= room;
+  const chosen = fits(tag) ? tag : fits(short) || segsWidth(short) + 2 < room ? short : [];
+  const t = truncate(title, room - (chosen.length ? segsWidth(chosen) + 2 : 0));
+  const fill = room - segsWidth(t) - (chosen.length ? segsWidth(chosen) + 2 : 0);
+  return [['╭─ ', DIM], ...t, [` ${'─'.repeat(Math.max(0, fill))}`, DIM], ...(chosen.length ? ([[' ', null], ...chosen] as Seg[]) : []), [' ─╮', DIM]];
 }
 
 /**
@@ -221,14 +222,14 @@ function header(state: State, steps: string[], sums: Seg[] = summary(state), rig
     const side = w - 4 - LOGO_WIDTH - 3;
     const beside: Seg[][] = [sums, right, identity(state.account), usage, machine, TAGLINE];
     return [
-      boxEdge(tabs(state, steps), versionTag(state), w),
+      boxEdge(tabs(state, steps), versionTag(state), w, [[`v${VERSION}`, DIM]]),
       ...logo().map((art, i): Seg[] => [['│ ', DIM], ...fitCells(art, LOGO_WIDTH), ['   ', null], ...spread(beside[i] ?? [], [], side), [' │', DIM]]),
       bottom,
       [],
     ];
   }
   return [
-    boxEdge(tabs(state, steps), versionTag(state), w),
+    boxEdge(tabs(state, steps), versionTag(state), w, [[`v${VERSION}`, DIM]]),
     boxRow(sums, right, w),
     boxRow(identity(state.account), usage, w),
     boxRow(machine, [], w),
@@ -253,6 +254,16 @@ function footer(state: State, hints: [Hint[], Hint[]]): Seg[][] {
   }
   if (state.input?.kind === 'new')
     return [[['New issue › ', SKY], [state.input.text, BOLD], ['█', SKY]], [['ABC-123 · 42 · issue URL · "a description" · --note "…"   enter launch · esc cancel', DIM]]];
+  if (state.menu !== null && state.page === 'issues') {
+    return [
+      [['Issues', DIM]],
+      ...ISSUE_MENU.map((item, i): Seg[] => {
+        const on = i === state.menu;
+        return [[on ? '› ' : '  ', on ? SKY : null], [item.key, BOLD], ['  ', null], [item.label(state).padEnd(34), on ? SKY : INK], [item.hint, DIM]];
+      }),
+      [['↑↓ choose · enter or the letter runs it · esc closes', DIM]],
+    ];
+  }
   if (state.menu !== null) {
     const names = targets(state).map((r) => r.key ?? r.label);
     const what = state.marks.length ? `${names.length} ticked: ${names.join(', ')}` : names[0] ?? '';
@@ -409,16 +420,25 @@ const ISSUE_COLUMNS: Column[] = [
   { key: 'mark', title: '', width: 1 },
   { key: 'src', title: 'SRC', width: 3 },
   { key: 'key', title: 'KEY', width: 10 },
-  { key: 'status', title: 'STATUS', width: 13, drop: 0 },
+  { key: 'status', title: 'STATUS', width: 13 },
   { key: 'title', title: 'TITLE', width: 20, flex: true },
   { key: 'session', title: 'SESSION', width: 19, drop: 3 },
   { key: 'pr', title: 'PR', width: 13, drop: 2 },
   { key: 'ci', title: 'CI', width: 10, drop: 1 },
 ];
 
+/** The fixed columns with one per configured Jira field after STATUS; asked-for fields drop last, the first of them after the rest. */
+export function issueColumns(fields: string[]): Column[] {
+  const extra = fields.map((f, n): Column => ({ key: `field:${f}`, title: f.toUpperCase(), width: Math.min(18, Math.max(8, f.length)), drop: 4 + fields.length - n }));
+  const at = ISSUE_COLUMNS.findIndex((c) => c.key === 'status') + 1;
+  return [...ISSUE_COLUMNS.slice(0, at), ...extra, ...ISSUE_COLUMNS.slice(at)];
+}
+
 function issueCells(state: State, i: Issue): Record<string, Seg[]> {
   const r = sessionFor(i, state.rows);
+  const extra = Object.fromEntries(state.settings.issueFields.map((f): [string, Seg[]] => [`field:${f}`, i.extra?.[f] ? [[i.extra[f], INK2]] : [['—', DIM]]]));
   return {
+    ...extra,
     mark: state.issues.marks.includes(i.url) ? [['☑', BOLD]] : [['☐', DIM]],
     src: [[i.source === 'jira' ? 'J' : 'GH', DIM]],
     key: [[i.key, r && isLive(r) ? INK2 : BOLD, i.url]],
@@ -439,12 +459,12 @@ export function issuesScreen(state: State): string[] {
   if (is.filter || is.filtering) sums.push(['   / ', DIM], [is.filter, BOLD], ...(is.filtering ? ([['█', SKY]] as Seg[]) : []));
   const trackers: Seg[] = [...trackerChip('Jira', is.jira, 'J'), ['   ', null], ...trackerChip('GitHub', is.github, 'G')];
   const top = header(state, [], sums, trackers).map((l) => paint(l, w));
-  const act: Hint[] = [['enter', 'launch'], ['/', 'filter'], ['o', 'open'], ['r', 'refresh'], ['J', 'connect Jira']];
+  const act: Hint[] = [['m', 'menu'], ['enter', 'launch'], ['n', 'new'], ['/', 'filter'], ['o', 'open'], ['r', 'refresh'], ['J', 'connect Jira']];
   if (is.github.state !== 'connected') act.push(['G', 'connect GitHub']);
   act.push(['q', 'quit']);
   const bottom = footer(state, [[['1', 'sessions'], ['↑↓', 'select'], ['space', 'tick'], ['*', 'all']], act]).map((l) => paint(l, w));
 
-  const cols = layout(ISSUE_COLUMNS, w - 2);
+  const cols = layout(issueColumns(state.settings.issueFields), w - 2);
   const body: string[] = [paint([['  ', null], ...headerRow(cols)], w)];
   const room = Math.max(1, state.height - top.length - bottom.length - 1);
   const connected = is.jira.state === 'connected' || is.github.state === 'connected';

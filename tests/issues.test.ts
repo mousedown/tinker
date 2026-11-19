@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { jqlFor, launchArgs, matches, parseGhAuth, parseGhIssues, parseJiraSearch, sessionFor, type Issue } from '../tui/issues';
+import { fieldText, jqlFor, launchArgs, launchDir, resolveFields, matches, parseGhAuth, parseGhIssues, parseJiraSearch, sessionFor, type Issue } from '../tui/issues';
 import { row } from './fixtures';
 
 const jiraIssue: Issue = {
@@ -78,5 +78,51 @@ describe('issues', () => {
     expect(matches(jiraIssue, 'sv-1')).toBe(true);
     expect(matches(jiraIssue, '')).toBe(true);
     expect(matches(jiraIssue, 'zzz')).toBe(false);
+  });
+});
+
+describe('extra Jira fields', () => {
+  test('parseJiraSearch reads the asked-for fields by their label', () => {
+    const json = JSON.stringify({ issues: [{ key: 'SV-1', fields: { summary: 'x', customfield_1: { value: 'P2' } } }, { key: 'SV-2', fields: { summary: 'y' } }] });
+    const [a, b] = parseJiraSearch(json, 'https://x', [{ label: 'Launch Priority', id: 'customfield_1' }]);
+    expect(a.extra).toEqual({ 'Launch Priority': 'P2' });
+    expect(b.extra).toEqual({ 'Launch Priority': '' });
+    expect(parseJiraSearch(json, 'https://x')[0].extra).toBeUndefined();
+  });
+
+  test('fieldText flattens options, users, cascades and lists', () => {
+    expect(fieldText({ value: 'P2' })).toBe('P2');
+    expect(fieldText({ displayName: 'Chris A' })).toBe('Chris A');
+    expect(fieldText({ value: 'A', child: { value: 'B' } })).toBe('A / B');
+    expect(fieldText([{ name: 'x' }, { name: 'y' }])).toBe('x, y');
+    expect(fieldText(3)).toBe('3');
+    expect(fieldText(null)).toBe('');
+  });
+
+  test('resolveFields matches an id, else a name ignoring case, and drops unknowns', () => {
+    const known = [{ id: 'customfield_1', name: 'Launch Priority' }, { id: 'priority', name: 'Priority' }];
+    expect(resolveFields(['launch priority', 'priority', 'Nope'], known)).toEqual([
+      { label: 'launch priority', id: 'customfield_1' },
+      { label: 'priority', id: 'priority' },
+    ]);
+  });
+});
+
+describe('launchDir', () => {
+  const rows = [
+    { key: 'SV-1', cwd: '/web/.claude/worktrees/a', startedAt: 1 },
+    { key: 'SV-2', cwd: '/web/.claude/worktrees/b', startedAt: 2 },
+    { key: 'OPS-1', cwd: '/ops', startedAt: 3 },
+    { key: null, cwd: '/x', startedAt: 4 },
+  ];
+  test('a Jira key runs where the newest session on its project ran', () => {
+    expect(launchDir('SV-4244', rows)).toBe('/web/.claude/worktrees/b');
+    expect(launchDir('OPS-9 OPS-10', rows)).toBe('/ops');
+  });
+  test('an explicit repo, an unknown project, GitHub or a description decide nothing', () => {
+    expect(launchDir('--repo "/r" SV-4244', rows)).toBeNull();
+    expect(launchDir('ABC-1', rows)).toBeNull();
+    expect(launchDir('GH-3', rows)).toBeNull();
+    expect(launchDir('"fix the footer"', rows)).toBeNull();
   });
 });

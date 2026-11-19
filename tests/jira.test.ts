@@ -105,4 +105,12 @@ describe('settings', () => {
     expect(loadSettings(join(dir, 'a.json')).jql).toBe('project = X');
     expect(loadSettings(join(dir, 'b.json')).jql).toBeNull();
   });
+
+  test('loadSettings keeps issueFields as trimmed unique strings', () => {
+    const dir = tmp();
+    writeFileSync(join(dir, 'a.json'), JSON.stringify({ issueFields: [' Launch Priority ', 'Launch Priority', 4, ''] }));
+    writeFileSync(join(dir, 'b.json'), JSON.stringify({ issueFields: 'Launch Priority' }));
+    expect(loadSettings(join(dir, 'a.json')).issueFields).toEqual(['Launch Priority']);
+    expect(loadSettings(join(dir, 'b.json')).issueFields).toEqual([]);
+  });
 });

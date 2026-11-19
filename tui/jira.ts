@@ -1,7 +1,7 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import { homedir } from 'os';
 import { dirname, join } from 'path';
-import { parseJiraSearch, type Issue } from './issues';
+import { parseJiraSearch, type ExtraField, type Issue } from './issues';
 
 /** A Jira Cloud site and an API token. The token never reaches argv, the screen or a message. */
 export interface Creds {
@@ -103,7 +103,21 @@ export async function jiraMyself(c: Creds, fetch: Fetch): Promise<{ ok: true; na
   }
 }
 
-export async function jiraSearch(c: Creds, jql: string, fetch: Fetch): Promise<JiraResult> {
-  const r = await get(c, `/rest/api/3/search/jql?jql=${encodeURIComponent(jql)}&fields=summary,status,updated&maxResults=50`, fetch);
-  return r.ok ? { ok: true, issues: parseJiraSearch(r.body, c.site) } : r;
+export async function jiraSearch(c: Creds, jql: string, fetch: Fetch, extra: ExtraField[] = []): Promise<JiraResult> {
+  const fields = ['summary', 'status', 'updated', ...extra.map((f) => f.id)].join(',');
+  const r = await get(c, `/rest/api/3/search/jql?jql=${encodeURIComponent(jql)}&fields=${fields}&maxResults=50`, fetch);
+  return r.ok ? { ok: true, issues: parseJiraSearch(r.body, c.site, extra) } : r;
+}
+
+/** Every field on the site, so a setting can name one ("Launch Priority") rather than know its id. */
+export async function jiraFields(c: Creds, fetch: Fetch): Promise<{ id: string; name: string }[]> {
+  const r = await get(c, '/rest/api/3/field', fetch);
+  if (!r.ok) return [];
+  try {
+    return (JSON.parse(r.body) as { id?: string; name?: string }[])
+      .filter((f) => f.id && f.name)
+      .map((f) => ({ id: f.id!, name: f.name! }));
+  } catch {
+    return [];
+  }
 }
