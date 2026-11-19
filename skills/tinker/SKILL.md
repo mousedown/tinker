@@ -25,6 +25,8 @@ ${CLAUDE_PLUGIN_ROOT}/bin/tinker ABC-101 ABC-102 --note "Add an integration test
 - `--dry-run` prints the commands without launching.
 - Self-review uses Claude Code's built-in `/code-review --fix` unless `TINKER_REVIEW` names another
   command (e.g. `TINKER_REVIEW="/my-review --fix"`) or the repo's CLAUDE.md does.
+- Prepare follows `/tinker:prepare`'s own steps unless `TINKER_PREPARE` (e.g. `"/prep"`) or the repo's
+  CLAUDE.md names the repo's own command for it; then it hands the work to that command.
 
 Launch straight away for up to eight issues. Above eight, confirm the count once first: each session
 spends tokens.

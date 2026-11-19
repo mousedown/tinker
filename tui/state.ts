@@ -301,8 +301,19 @@ const END = ' Begin your last message with the tinker-status line and end it wit
 
 export const PREPARE_SKILL = join(dirname(fileURLToPath(import.meta.url)), '..', 'skills', 'prepare', 'SKILL.md');
 
-export function preparePrompt(r: Row, settings: Settings, review = process.env.TINKER_REVIEW, skill = PREPARE_SKILL): string {
-  const flags = [settings.draft ? '--draft' : '', settings.autoMerge ? '--auto-merge' : '', review ? `--review "${review}"` : '']
+export function preparePrompt(
+  r: Row,
+  settings: Settings,
+  review = process.env.TINKER_REVIEW,
+  skill = PREPARE_SKILL,
+  prepare = process.env.TINKER_PREPARE
+): string {
+  const flags = [
+    settings.draft ? '--draft' : '',
+    settings.autoMerge ? '--auto-merge' : '',
+    review ? `--review "${review}"` : '',
+    prepare ? `--prepare "${prepare}"` : '',
+  ]
     .filter(Boolean)
     .join(' ');
   const where = r.pr ? ` for PR #${r.pr.number} on branch ${r.pr.branch}` : '';
