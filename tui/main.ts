@@ -7,6 +7,7 @@ import {
   issueKey,
   labelOf,
   prFor,
+  prWait,
   pulls,
   repoRoot,
   sessions,
@@ -35,19 +36,22 @@ import { plainTable, screen } from './view';
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const LAUNCHER = join(ROOT, 'bin', 'tinker');
 const POLL_MS = 2000;
-const PR_MS = 20000;
 const LIMITS_MS = 30_000;
 const ISSUES_MS = 60_000;
 const ACCOUNT_MS = 10 * 60_000;
 
-const prCache = new Map<string, { at: number; prs: Pr[] }>();
+const prCache = new Map<string, { at: number; prs: Pr[]; fails: number }>();
 
 async function prsFor(root: string, force: boolean): Promise<Pr[]> {
   const hit = prCache.get(root);
-  if (hit && !force && Date.now() - hit.at < PR_MS) return hit.prs;
+  if (hit && !force && Date.now() - hit.at < prWait(hit.fails)) return hit.prs;
   const prs = await pulls(root);
-  if (prs === null) return hit?.prs ?? [];
-  prCache.set(root, { at: Date.now(), prs });
+  if (prs === null) {
+    const kept = hit?.prs ?? [];
+    prCache.set(root, { at: Date.now(), prs: kept, fails: (hit?.fails ?? 0) + 1 });
+    return kept;
+  }
+  prCache.set(root, { at: Date.now(), prs, fails: 0 });
   return prs;
 }
 

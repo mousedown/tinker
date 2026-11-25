@@ -170,6 +170,13 @@ function ciOf(checks: GhPr['statusCheckRollup']): Ci {
   return 'pending';
 }
 
+export const PR_MS = 60_000;
+const PR_WAIT_MAX_MS = 10 * 60_000;
+
+export function prWait(fails: number): number {
+  return Math.min(PR_MS * 2 ** Math.max(0, fails), PR_WAIT_MAX_MS);
+}
+
 export async function pulls(cwd: string): Promise<Pr[] | null> {
   if (!existsSync(cwd)) return null;
   const out = await run(
